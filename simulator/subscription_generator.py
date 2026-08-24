@@ -1,9 +1,10 @@
 """
-Subscription generator — creates one subscription per customer.
+Subscription generator (v2) — identical to v1.
 
-Each subscription has:
-    subscription_id, customer_id, plan_type, amount,
-    billing_frequency, subscription_age_days
+The subscription model is unchanged in v2. Each customer receives one active
+subscription. The amount and plan type influence expected_net_recovery_value
+calculations in ground_truth.py (because cost is subtracted from
+amount × probability), but the subscription generation itself is unchanged.
 """
 
 import numpy as np
