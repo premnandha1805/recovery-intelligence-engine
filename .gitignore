@@ -11,6 +11,11 @@ __pycache__/
 dist/
 build/
 
+# Generated evaluation data & detailed dumps (Day 5)
+ml/evaluation/seed555_data/
+ml/evaluation/training_seed*/
+ml/evaluation/*_detailed_evaluation.csv
+
 # Generated data
 data/raw/*.csv
 

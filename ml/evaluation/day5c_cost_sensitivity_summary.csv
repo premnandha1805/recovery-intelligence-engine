@@ -1,0 +1,13 @@
+Scenario,Population,Causal Net Value,RuleBased Net Value,Difference (INR),% Difference,Causal Rank,Causal ESCALATE %
+Baseline (ESCALATE=250),Seed 42 (In-Sample Fit Check),"INR 17,450,062.53","INR 14,822,365.69","+2,627,696.84",+17.73%,#1,0.04%
+Baseline (ESCALATE=250),Seed 777 (OOS Population 1),"INR 16,486,990.85","INR 14,433,756.53","+2,053,234.32",+14.23%,#1,0.13%
+Baseline (ESCALATE=250),Seed 555 (OOS Population 2),"INR 17,491,398.62","INR 14,817,685.72","+2,673,712.90",+18.04%,#1,0.17%
+Lower Escalation Cost (ESCALATE=100),Seed 42 (In-Sample Fit Check),"INR 17,438,366.22","INR 15,699,265.69","+1,739,100.53",+11.08%,#1,0.21%
+Lower Escalation Cost (ESCALATE=100),Seed 777 (OOS Population 1),"INR 16,471,065.57","INR 15,235,656.53","+1,235,409.04",+8.11%,#1,0.41%
+Lower Escalation Cost (ESCALATE=100),Seed 555 (OOS Population 2),"INR 17,493,909.44","INR 15,624,085.72","+1,869,823.72",+11.97%,#1,0.41%
+Higher Escalation Cost (ESCALATE=500),Seed 42 (In-Sample Fit Check),"INR 17,456,866.08","INR 13,360,865.69","+4,096,000.39",+30.66%,#1,0.02%
+Higher Escalation Cost (ESCALATE=500),Seed 777 (OOS Population 1),"INR 16,488,730.25","INR 13,097,256.53","+3,391,473.72",+25.89%,#1,0.04%
+Higher Escalation Cost (ESCALATE=500),Seed 555 (OOS Population 2),"INR 17,502,107.40","INR 13,473,685.72","+4,028,421.68",+29.90%,#1,0.08%
+Zero Intervention Costs (all=0),Seed 42 (In-Sample Fit Check),"INR 17,697,909.12","INR 16,502,560.69","+1,195,348.43",+7.24%,#1,1.70%
+Zero Intervention Costs (all=0),Seed 777 (OOS Population 1),"INR 16,679,559.51","INR 15,988,721.53","+690,837.98",+4.32%,#1,2.13%
+Zero Intervention Costs (all=0),Seed 555 (OOS Population 2),"INR 17,743,826.02","INR 16,386,510.72","+1,357,315.30",+8.28%,#1,2.05%
