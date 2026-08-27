@@ -2,12 +2,14 @@
 decision_engine/test_graph.py
 =============================
 Unit and end-to-end tests for LangGraph state and graph flow.
-Includes the 3 required demonstration cases (Case A, Case B, Case C).
+Includes the 3 required demonstration cases (Case A, Case B, Case C)
+with full reasoning -> guardrail -> execution -> SQLite audit persistence.
 All tests mock external services and run completely offline.
 """
 
 from __future__ import annotations
 
+import pathlib
 from unittest.mock import MagicMock
 import pandas as pd
 import pytest
@@ -17,6 +19,12 @@ from decision_engine.context_node import context_node
 from decision_engine.estimation_node import estimation_node
 from decision_engine.reasoning_node import LLMDecision
 from decision_engine.graph import create_recovery_graph
+from decision_engine.audit import (
+    init_audit_db,
+    get_audit_record,
+    get_audit_row_count,
+    get_audit_records_count_for_payment,
+)
 
 
 # ── Fixtures & Mock Helpers ──────────────────────────────────────────────────
@@ -165,17 +173,23 @@ def test_estimation_node_skipped_when_error_exists():
     assert update["audit_trail"][0]["status"] == "skipped"
 
 
-def test_graph_compiles():
+def test_graph_compiles(tmp_path):
     """Test 13: LangGraph compiles without syntax or schema errors."""
-    graph = create_recovery_graph(policy=make_mock_policy(), llm=make_mock_llm())
+    test_db = tmp_path / "test_compile.db"
+    graph = create_recovery_graph(
+        policy=make_mock_policy(),
+        llm=make_mock_llm(),
+        db_path=test_db,
+    )
     assert graph is not None
 
 
-def test_audit_trail_preserves_entries_across_nodes():
+def test_audit_trail_preserves_entries_across_nodes(tmp_path):
     """Test 12: Ensure operator.add reducer accumulates audit events across nodes."""
+    test_db = tmp_path / "test_trail.db"
     mock_policy = make_mock_policy()
     mock_llm = make_mock_llm()
-    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm)
+    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm, db_path=test_db)
 
     init_state: RecoveryState = {
         "payment_id": "pay_000001_a1",
@@ -189,14 +203,17 @@ def test_audit_trail_preserves_entries_across_nodes():
     assert "context_node" in nodes_in_trail
     assert "estimation_node" in nodes_in_trail
     assert "reasoning_node" in nodes_in_trail
-    assert len(final_state["audit_trail"]) >= 4
+    assert "guardrail_node" in nodes_in_trail
+    assert "execution_node" in nodes_in_trail
+    assert len(final_state["audit_trail"]) >= 6
 
 
-def test_graph_determinism():
+def test_graph_determinism(tmp_path):
     """Test Determinism: Repeated execution with identical state and mock output produces identical results."""
+    test_db = tmp_path / "test_det.db"
     mock_policy = make_mock_policy()
     mock_llm = make_mock_llm()
-    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm)
+    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm, db_path=test_db)
 
     state1 = graph.invoke({"payment_id": "pay_000001_a1", "audit_trail": []})
     state2 = graph.invoke({"payment_id": "pay_000001_a1", "audit_trail": []})
@@ -205,21 +222,24 @@ def test_graph_determinism():
     assert state1["arm_probabilities"] == state2["arm_probabilities"]
     assert state1["arm_net_values"] == state2["arm_net_values"]
     assert state1["llm_decision"]["expected_incremental_value"] == state2["llm_decision"]["expected_incremental_value"]
+    assert state1["guardrail_result"] == state2["guardrail_result"]
 
 
 # ── THREE REQUIRED END-TO-END DEMONSTRATION CASES ────────────────────────────
 
-def test_case_a_normal_payment_end_to_end():
+def test_case_a_normal_payment_end_to_end(tmp_path):
     """
     CASE A — NORMAL PAYMENT:
     - Valid Seed-777 payment
     - context succeeds
     - estimation succeeds
     - reasoning node calls mocked LLM
-    - structured result is produced
+    - guardrail evaluates and PASSES
+    - execution node runs and persists to SQLite
     - expected_incremental_value is populated from arm_net_values
-    - audit_trail contains node events
+    - audit_trail contains all node events
     """
+    test_db = tmp_path / "case_a.db"
     mock_policy = make_mock_policy()
     mock_llm = make_mock_llm(
         decisions=[
@@ -232,7 +252,7 @@ def test_case_a_normal_payment_end_to_end():
         ]
     )
 
-    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm)
+    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm, db_path=test_db)
     input_state: RecoveryState = {
         "payment_id": "pay_000001_a1",
         "audit_trail": [],
@@ -247,75 +267,97 @@ def test_case_a_normal_payment_end_to_end():
     assert result["llm_decision"]["decision"] == "RETRY_NUDGE"
     assert result["llm_decision"]["confidence"] == 0.88
     assert result["llm_decision"]["decision_source"] == "llm"
-    # Must match python arm_net_values
     assert result["llm_decision"]["expected_incremental_value"] == result["arm_net_values"]["RETRY_NUDGE"]
+
+    # Guardrail passed
+    assert result["guardrail_result"]["status"] == "passed"
+    assert result["guardrail_result"]["overridden"] is False
+    assert result["guardrail_result"]["final_action"] == "RETRY_NUDGE"
 
     # Audit events
     event_nodes = [ev["node"] for ev in result["audit_trail"]]
     assert "context_node" in event_nodes
     assert "estimation_node" in event_nodes
     assert "reasoning_node" in event_nodes
+    assert "guardrail_node" in event_nodes
+    assert "execution_node" in event_nodes
+
+    # SQLite DB record
+    rec = get_audit_record("pay_000001_a1", db_path=test_db)
+    assert rec is not None
+    assert rec["payment_id"] == "pay_000001_a1"
+    assert rec["final_action"] == "RETRY_NUDGE"
+    assert rec["llm_proposed_decision"] == "RETRY_NUDGE"
+    assert rec["guardrail_verdict"] == "passed"
+    assert rec["expected_incremental_value"] == result["arm_net_values"]["RETRY_NUDGE"]
 
 
-def test_case_b_llm_fails_twice_end_to_end():
+def test_case_b_guardrail_override_end_to_end(tmp_path):
     """
-    CASE B — LLM FAILS TWICE:
-    - Mocked reasoning model raises errors twice
-    - First attempt fails, second attempt fails
-    - fallback_no_llm is set
-    - fallback decision = argmax over permitted arm_net_values
-    - expected_incremental_value comes from arm_net_values
-    - audit_trail records the fallback
-    - graph does not crash
+    CASE B — GUARDRAIL OVERRIDE:
+    - LLM proposes ESCALATE
+    - Customer history has lifetime_escalations >= 1
+    - Guardrail OVERRIDES ESCALATE to WAIT
+    - Final action is WAIT
+    - Override reason is preserved and recorded in SQLite
     """
+    test_db = tmp_path / "case_b.db"
     mock_policy = make_mock_policy()
     mock_llm = make_mock_llm(
-        raise_errors=[
-            RuntimeError("Foundry service unavailable (attempt 1)"),
-            RuntimeError("Rate limit / malformed JSON (attempt 2)"),
+        decisions=[
+            LLMDecision(
+                decision="ESCALATE",
+                confidence=0.95,
+                reasoning="High amount transaction, recommending immediate escalation.",
+                risk_level="high",
+            )
         ]
     )
 
-    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm)
+    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm, db_path=test_db)
+    # Inject customer_history with lifetime_escalations = 1 to trigger Guardrail 3
     input_state: RecoveryState = {
         "payment_id": "pay_000001_a1",
+        "customer_history": {"lifetime_escalations": 1, "customer_id": "cust_000001"},
+        "payment_context": {"status": "failed", "retry_count_current_cycle": 0},
         "audit_trail": [],
     }
 
     result = graph.invoke(input_state)
 
     # Verifications
-    assert result.get("error") is None
-    assert result["llm_decision"]["decision_source"] == "fallback_no_llm"
-    assert result["llm_decision"]["reasoning"] == "LLM fallback — using argmax directly"
+    assert result["llm_decision"]["decision"] == "ESCALATE"
+    assert result["guardrail_result"]["status"] == "overridden"
+    assert result["guardrail_result"]["overridden"] is True
+    assert result["guardrail_result"]["proposed_action"] == "ESCALATE"
+    assert result["guardrail_result"]["final_action"] == "WAIT"
+    assert "escalation" in result["guardrail_result"]["reason"].lower()
+    assert result["final_action"] == "WAIT"
 
-    # Argmax over arm_net_values
-    expected_argmax = max(result["permitted_actions"], key=lambda a: result["arm_net_values"][a])
-    assert result["final_action"] == expected_argmax
-    assert result["llm_decision"]["decision"] == expected_argmax
-    assert result["llm_decision"]["expected_incremental_value"] == result["arm_net_values"][expected_argmax]
-
-    # Audit check
-    fallback_events = [ev for ev in result["audit_trail"] if ev.get("status") == "fallback"]
-    assert len(fallback_events) >= 1
-    assert fallback_events[0]["node"] == "reasoning_node"
+    # SQLite DB record verification
+    rec = get_audit_record("pay_000001_a1", db_path=test_db)
+    assert rec is not None
+    assert rec["llm_proposed_decision"] == "ESCALATE"
+    assert rec["final_action"] == "WAIT"
+    assert rec["guardrail_verdict"] == "overridden"
+    assert "escalation" in rec["guardrail_reason"].lower()
 
 
-def test_case_c_malformed_or_missing_payment_id_end_to_end():
+def test_case_c_malformed_or_missing_payment_id_end_to_end(tmp_path):
     """
     CASE C — MALFORMED / MISSING PAYMENT ID:
     - Invalid or missing payment_id
     - context_node sets state["error"]
-    - estimation_node does NOT invoke CausalUpliftPolicy
-    - reasoning_node is skipped
+    - estimation_node skips CausalUpliftPolicy
+    - reasoning_node and guardrail_node are bypassed
+    - execution_node runs and persists error record
     - final_action = WAIT
-    - audit_trail explains the error
-    - graph completes without crashing
     """
+    test_db = tmp_path / "case_c.db"
     mock_policy = make_mock_policy()
     mock_llm = make_mock_llm()
 
-    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm)
+    graph = create_recovery_graph(policy=mock_policy, llm=mock_llm, db_path=test_db)
     input_state: RecoveryState = {
         "payment_id": "non_existent_payment_xyz",
         "audit_trail": [],
@@ -337,4 +379,14 @@ def test_case_c_malformed_or_missing_payment_id_end_to_end():
     assert "context_node" in event_nodes
     assert "estimation_node" in event_nodes
     assert "error_fallback" in event_nodes
+    assert "execution_node" in event_nodes
     assert "reasoning_node" not in event_nodes
+    assert "guardrail_node" not in event_nodes
+
+    # SQLite DB record verification
+    rec = get_audit_record("non_existent_payment_xyz", db_path=test_db)
+    assert rec is not None
+    assert rec["error_status"] is not None
+    assert rec["final_action"] == "WAIT"
+    assert rec["llm_proposed_decision"] == "N/A — error path"
+    assert rec["guardrail_verdict"] == "N/A — error path"

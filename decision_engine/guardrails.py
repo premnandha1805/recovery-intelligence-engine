@@ -269,3 +269,8 @@ def apply_guardrails(
         overridden=False,
         reason=f"Proposed action {action.value} passed all deterministic guardrails.",
     )
+
+
+# Alias matching Day 6D graph specification: guardrails.check(...)
+check = apply_guardrails
+

@@ -168,6 +168,10 @@ def context_node(
         "retry_count_current_cycle": max(0, int(row["attempt_number"]) - 1),
     }
 
+    input_pmt_ctx = state.get("payment_context") or {}
+    payment_context.update(input_pmt_ctx)
+
+    input_cust_hist = state.get("customer_history") or {}
     customer_history = {
         "customer_id": str(row.get("customer_id", "")),
         "days_active": int(row.get("days_active", 0)),
@@ -179,6 +183,8 @@ def context_node(
         "lifetime_escalations": 0,
         "interventions_last_7_days": 0,
     }
+    customer_history.update(input_cust_hist)
+
 
     return {
         "payment_id": clean_pid,
