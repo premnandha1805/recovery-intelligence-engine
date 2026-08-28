@@ -585,3 +585,82 @@ async def test_m_graceful_shutdown_closes_connection(tmp_path: pathlib.Path):
 
         with pytest.raises(Exception):
             await app.state.db.execute("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_day7f_request_correlation_n_through_s(tmp_path: pathlib.Path):
+    """
+    Day 7F Tests N through S:
+    N. X-Request-Id header preserved
+    O. request ID appears in RunnableConfig
+    P. request ID appears in audit_trail
+    Q. request ID appears in SQLite request_id column
+    R. request_id != decision_id
+    S. response header matches request ID
+    """
+    app_instance, db, _ = await init_test_app(tmp_path)
+    try:
+        captured_configs = []
+        original_ainvoke = app_instance.state.graph.ainvoke
+
+        async def spy_ainvoke(state, config=None):
+            captured_configs.append(config)
+            return await original_ainvoke(state, config=config)
+
+        app_instance.state.graph.ainvoke = spy_ainvoke
+
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            client_req_id = "req-client-day7f-corr-888"
+            target_pid = "pay_000001_a1"
+
+            # Call /evaluate with X-Request-Id header (no JSON request_id)
+            resp = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": client_req_id},
+                json={"payment_id": target_pid, "force_recompute": True},
+            )
+            assert resp.status_code == 200
+
+            # Test N & S: X-Request-Id header preserved and matches response body request_id
+            header_req_id = resp.headers.get("x-request-id")
+            assert header_req_id == client_req_id
+            body_req_id = resp.json().get("request_id")
+            assert body_req_id == client_req_id
+            assert header_req_id == body_req_id
+
+            # Test O: request ID appears in RunnableConfig
+            assert len(captured_configs) > 0
+            cfg = captured_configs[-1]
+            assert cfg is not None
+            assert cfg.get("configurable", {}).get("request_id") == client_req_id
+
+            # Test P: request ID appears in audit_trail
+            graph_res = await original_ainvoke(
+                {"payment_id": "pay_000002_a2", "audit_trail": []},
+                config={
+                    "configurable": {
+                        "request_id": client_req_id,
+                        "db": db,
+                        "llm_semaphore": app_instance.state.llm_semaphore,
+                    }
+                },
+            )
+            assert len(graph_res["audit_trail"]) > 0
+            for ev in graph_res["audit_trail"]:
+                assert ev.get("request_id") == client_req_id
+
+            # Test Q & R: request ID appears in SQLite request_id column and != decision_id
+            async with db.execute(
+                "SELECT decision_id, request_id FROM decision_audit WHERE payment_id = ?",
+                (target_pid,),
+            ) as cur:
+                row = await cur.fetchone()
+                assert row is not None
+                db_decision_id, db_request_id = row[0], row[1]
+                assert db_request_id == client_req_id
+                assert db_decision_id == f"dec_{target_pid}"
+                assert db_request_id != db_decision_id
+    finally:
+        await db.close()
+

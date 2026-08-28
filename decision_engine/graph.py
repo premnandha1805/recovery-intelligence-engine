@@ -122,23 +122,53 @@ def create_recovery_graph(
 
     if not use_async:
         # Day 6 synchronous execution path
-        def run_context(state: RecoveryState) -> dict[str, Any]:
-            return context_node(state, dataset=dataset)
+        def run_context(state: RecoveryState, config: RunnableConfig = None) -> dict[str, Any]:
+            res = context_node(state, dataset=dataset)
+            req_id = (config.get("configurable", {}) if config else {}).get("request_id")
+            if req_id and "audit_trail" in res:
+                for ev in res["audit_trail"]:
+                    ev["request_id"] = req_id
+            return res
 
-        def run_estimation(state: RecoveryState) -> dict[str, Any]:
-            return estimation_node(state, policy=policy)
+        def run_estimation(state: RecoveryState, config: RunnableConfig = None) -> dict[str, Any]:
+            res = estimation_node(state, policy=policy)
+            req_id = (config.get("configurable", {}) if config else {}).get("request_id")
+            if req_id and "audit_trail" in res:
+                for ev in res["audit_trail"]:
+                    ev["request_id"] = req_id
+            return res
 
-        def run_reasoning(state: RecoveryState) -> dict[str, Any]:
-            return reasoning_node(state, llm=llm)
+        def run_reasoning(state: RecoveryState, config: RunnableConfig = None) -> dict[str, Any]:
+            res = reasoning_node(state, llm=llm)
+            req_id = (config.get("configurable", {}) if config else {}).get("request_id")
+            if req_id and "audit_trail" in res:
+                for ev in res["audit_trail"]:
+                    ev["request_id"] = req_id
+            return res
 
-        def run_guardrail(state: RecoveryState) -> dict[str, Any]:
-            return guardrail_node(state)
+        def run_guardrail(state: RecoveryState, config: RunnableConfig = None) -> dict[str, Any]:
+            res = guardrail_node(state)
+            req_id = (config.get("configurable", {}) if config else {}).get("request_id")
+            if req_id and "audit_trail" in res:
+                for ev in res["audit_trail"]:
+                    ev["request_id"] = req_id
+            return res
 
-        def run_error_fallback(state: RecoveryState) -> dict[str, Any]:
-            return error_fallback_node(state)
+        def run_error_fallback(state: RecoveryState, config: RunnableConfig = None) -> dict[str, Any]:
+            res = error_fallback_node(state)
+            req_id = (config.get("configurable", {}) if config else {}).get("request_id")
+            if req_id and "audit_trail" in res:
+                for ev in res["audit_trail"]:
+                    ev["request_id"] = req_id
+            return res
 
-        def run_execution(state: RecoveryState) -> dict[str, Any]:
-            return execution_node(state, db_path=db_path)
+        def run_execution(state: RecoveryState, config: RunnableConfig = None) -> dict[str, Any]:
+            req_id = (config.get("configurable", {}) if config else {}).get("request_id")
+            res = execution_node(state, db_path=db_path, request_id=req_id)
+            if req_id and "audit_trail" in res:
+                for ev in res["audit_trail"]:
+                    ev["request_id"] = req_id
+            return res
 
     else:
         # Day 7 asynchronous execution path with RunnableConfig runtime context

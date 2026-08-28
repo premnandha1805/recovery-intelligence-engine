@@ -31,7 +31,7 @@ from typing import Any, Optional
 import uuid
 
 import aiosqlite
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -241,7 +241,7 @@ async def health_check():
 # ── Decision Evaluation Endpoint ─────────────────────────────────────────────
 
 @app.post("/evaluate")
-async def evaluate_decision(req: EvaluateRequest):
+async def evaluate_decision(req: EvaluateRequest, request: Request, response: Response):
     """
     Evaluate recovery decision with concurrency-safe idempotency and deadline-aware LLM execution.
     """
@@ -256,8 +256,22 @@ async def evaluate_decision(req: EvaluateRequest):
         )
     payment_id = req.payment_id.strip()
 
-    # Correlation ID: preserve caller-supplied or mint one server-side [FIX-10]
-    request_id = req.request_id.strip() if req.request_id and req.request_id.strip() else str(uuid.uuid4())
+    # Correlation ID:
+    # 1. Accept X-Request-Id header.
+    # 2. Preserve it if present.
+    # 3. Otherwise use request_id from the JSON body if present.
+    # 4. Otherwise generate one UUID.
+    header_req_id = request.headers.get("x-request-id")
+    if header_req_id and header_req_id.strip():
+        request_id = header_req_id.strip()
+    elif req.request_id and req.request_id.strip():
+        request_id = req.request_id.strip()
+    else:
+        request_id = str(uuid.uuid4())
+
+    # Return X-Request-Id in response header
+    response.headers["x-request-id"] = request_id
+
     logger.info(f"[{request_id}] /evaluate received for payment_id={payment_id}, force_recompute={req.force_recompute}")
 
     # 2. Acquire this payment's asyncio.Lock [FIX-1]

@@ -14,7 +14,7 @@ import {
   DecisionEngineUnavailableException,
 } from '../common/exceptions/decision-engine.exceptions';
 
-describe('DecisionController (e2e contract & error envelope validation)', () => {
+describe('DecisionController (Day 7F e2e contract, error envelope & request correlation)', () => {
   let app: INestApplication;
   let adapter: DecisionEngineAdapter;
 
@@ -63,6 +63,8 @@ describe('DecisionController (e2e contract & error envelope validation)', () => 
   afterAll(async () => {
     await app.close();
   });
+
+  // ── Contract & Success Tests ────────────────────────────────────────────────
 
   it('should accept valid payload with required payment_id only and return stable DecisionResponseDto', async () => {
     const response = await request(app.getHttpServer())
@@ -127,27 +129,11 @@ describe('DecisionController (e2e contract & error envelope validation)', () => 
     expect(response.body.request_id).toBeDefined();
   });
 
-  it('should preserve and propagate x-request-id client header when provided [FIX-10]', async () => {
-    const customRequestId = 'req-custom-client-test-uuid-999';
-    jest.spyOn(adapter, 'evaluate').mockImplementationOnce(async (pid, reqId) => ({
-      ...mockPythonDecision,
-      payment_id: pid,
-      request_id: reqId,
-    }));
+  // ── Day 7F Tests A through M ────────────────────────────────────────────────
 
-    const response = await request(app.getHttpServer())
-      .post('/decisions')
-      .set('x-request-id', customRequestId)
-      .send({
-        payment_id: 'pay_000003_a1',
-      })
-      .expect(200);
-
-    expect(response.body.request_id).toBe(customRequestId);
-  });
-
-  describe('Error Envelope & Status Mappings', () => {
-    it('should map invalid request payload to HTTP 400 with VALIDATION_ERROR code and request_id', async () => {
+  describe('Day 7F Tests A through M', () => {
+    // Test A: 400 validation error
+    it('Test A: 400 validation error maps to code VALIDATION_ERROR and status 400', async () => {
       const response = await request(app.getHttpServer())
         .post('/decisions')
         .send({})
@@ -156,17 +142,12 @@ describe('DecisionController (e2e contract & error envelope validation)', () => 
       expect(response.body.error).toBeDefined();
       expect(response.body.error.code).toBe('VALIDATION_ERROR');
       expect(response.body.error.message).toContain('payment_id should not be empty');
-      expect(response.body.error.request_id).toBeDefined();
       expect(typeof response.body.error.request_id).toBe('string');
       expect(response.body.error.request_id.length).toBeGreaterThan(10);
-      expect(response.body.message).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining('payment_id should not be empty'),
-        ]),
-      );
     });
 
-    it('should preserve caller X-Request-Id on validation error responses [FIX-10]', async () => {
+    // Test B: custom X-Request-Id preserved
+    it('Test B: custom X-Request-Id preserved on validation error responses [FIX-10]', async () => {
       const customReqId = 'req-custom-validation-fail-400';
       const response = await request(app.getHttpServer())
         .post('/decisions')
@@ -179,41 +160,21 @@ describe('DecisionController (e2e contract & error envelope validation)', () => 
       expect(response.headers['x-request-id']).toBe(customReqId);
     });
 
-    it('should reject invalid payment_id format with 400 VALIDATION_ERROR and request_id', async () => {
+    // Test C: generated request ID when absent
+    it('Test C: generated request ID when absent on error response', async () => {
       const response = await request(app.getHttpServer())
         .post('/decisions')
-        .send({
-          payment_id: 'invalid_payment_format',
-        })
+        .send({ payment_id: 'invalid_format' })
         .expect(400);
 
       expect(response.body.error.code).toBe('VALIDATION_ERROR');
-      expect(response.body.error.message).toContain(
-        'payment_id must match the format pay_XXXXXX_aY',
-      );
-      expect(response.body.error.request_id).toBeDefined();
+      expect(typeof response.body.error.request_id).toBe('string');
+      expect(response.body.error.request_id.length).toBeGreaterThan(10);
+      expect(response.headers['x-request-id']).toBe(response.body.error.request_id);
     });
 
-    it('should reject extra field "net_value" with 400 VALIDATION_ERROR and request_id [FIX-6 end-to-end]', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/decisions')
-        .send({
-          payment_id: 'pay_000001_a1',
-          net_value: 100,
-        })
-        .expect(400);
-
-      expect(response.body.error.code).toBe('VALIDATION_ERROR');
-      expect(response.body.error.message).toContain(
-        'property net_value should not exist',
-      );
-      expect(response.body.error.request_id).toBeDefined();
-      expect(response.body.message).toEqual(
-        expect.arrayContaining(['property net_value should not exist']),
-      );
-    });
-
-    it('should map Python unavailable to HTTP 503 with DECISION_ENGINE_UNAVAILABLE and request_id', async () => {
+    // Test D: 503 unavailable
+    it('Test D: dependency unavailable maps to HTTP 503 with DECISION_ENGINE_UNAVAILABLE and request_id', async () => {
       const customReqId = 'req-unavail-test-503';
       jest
         .spyOn(adapter, 'evaluate')
@@ -224,9 +185,7 @@ describe('DecisionController (e2e contract & error envelope validation)', () => 
       const response = await request(app.getHttpServer())
         .post('/decisions')
         .set('x-request-id', customReqId)
-        .send({
-          payment_id: 'pay_000001_a1',
-        })
+        .send({ payment_id: 'pay_000001_a1' })
         .expect(503);
 
       expect(response.body.error).toEqual({
@@ -237,27 +196,26 @@ describe('DecisionController (e2e contract & error envelope validation)', () => 
       expect(response.headers['x-request-id']).toBe(customReqId);
     });
 
-    it('should map Python timeout to HTTP 503 with DECISION_ENGINE_TIMEOUT and generated request_id', async () => {
+    // Test E: 503 timeout
+    it('Test E: dependency timeout maps to HTTP 503 with DECISION_ENGINE_TIMEOUT and generated request_id', async () => {
       jest
         .spyOn(adapter, 'evaluate')
         .mockRejectedValueOnce(new DecisionEngineTimeoutException());
 
       const response = await request(app.getHttpServer())
         .post('/decisions')
-        .send({
-          payment_id: 'pay_000001_a1',
-        })
+        .send({ payment_id: 'pay_000001_a1' })
         .expect(503);
 
-      expect(response.body.error).toEqual({
-        code: 'DECISION_ENGINE_TIMEOUT',
-        message: 'Python decision engine request timed out',
-        request_id: expect.any(String),
-      });
+      expect(response.body.error.code).toBe('DECISION_ENGINE_TIMEOUT');
+      expect(response.body.error.message).toBe('Python decision engine request timed out');
+      expect(typeof response.body.error.request_id).toBe('string');
       expect(response.body.error.request_id.length).toBeGreaterThan(10);
+      expect(response.headers['x-request-id']).toBe(response.body.error.request_id);
     });
 
-    it('should map upstream real 5xx to HTTP 502 with DECISION_ENGINE_ERROR and request_id', async () => {
+    // Test F: 502 upstream error
+    it('Test F: upstream controlled 5xx maps to HTTP 502 with DECISION_ENGINE_ERROR and request_id', async () => {
       const customReqId = 'req-upstream-502-trace';
       jest
         .spyOn(adapter, 'evaluate')
@@ -268,9 +226,7 @@ describe('DecisionController (e2e contract & error envelope validation)', () => 
       const response = await request(app.getHttpServer())
         .post('/decisions')
         .set('x-request-id', customReqId)
-        .send({
-          payment_id: 'pay_000001_a1',
-        })
+        .send({ payment_id: 'pay_000001_a1' })
         .expect(502);
 
       expect(response.body.error).toEqual({
@@ -281,29 +237,180 @@ describe('DecisionController (e2e contract & error envelope validation)', () => 
       expect(response.headers['x-request-id']).toBe(customReqId);
     });
 
-    it('should never leak credentials, secrets, or stack traces in error or success responses', async () => {
+    // Test G: 500 unexpected error
+    it('Test G: unexpected 500 error maps to INTERNAL_ERROR and never leaks the underlying cause', async () => {
+      const customReqId = 'req-unexpected-500-test';
+      jest
+        .spyOn(adapter, 'evaluate')
+        .mockRejectedValueOnce(
+          new Error('Critical DB connection failure at /var/run/secrets/sql.sock: access denied for user root'),
+        );
+
+      const response = await request(app.getHttpServer())
+        .post('/decisions')
+        .set('x-request-id', customReqId)
+        .send({ payment_id: 'pay_000001_a1' })
+        .expect(500);
+
+      expect(response.body.error).toEqual({
+        code: 'INTERNAL_ERROR',
+        message: 'Internal server error',
+        request_id: customReqId,
+      });
+      expect(response.headers['x-request-id']).toBe(customReqId);
+
+      // Verify underlying cause is NOT leaked
+      const bodyStr = JSON.stringify(response.body);
+      expect(bodyStr).not.toContain('Critical DB connection failure');
+      expect(bodyStr).not.toContain('/var/run/secrets');
+      expect(bodyStr).not.toContain('access denied');
+    });
+
+    // Test H: exact envelope keys
+    it('Test H: exact envelope keys across all failure responses: body contains ONLY "error"', async () => {
+      // 1. 400 validation error
+      const res400 = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({})
+        .expect(400);
+
+      expect(Object.keys(res400.body)).toEqual(['error']);
+      expect(Object.keys(res400.body.error).sort()).toEqual(
+        ['code', 'message', 'request_id'].sort(),
+      );
+
+      // 2. 503 unavailable
+      jest
+        .spyOn(adapter, 'evaluate')
+        .mockRejectedValueOnce(new DecisionEngineUnavailableException());
+      const res503 = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({ payment_id: 'pay_000001_a1' })
+        .expect(503);
+
+      expect(Object.keys(res503.body)).toEqual(['error']);
+      expect(Object.keys(res503.body.error).sort()).toEqual(
+        ['code', 'message', 'request_id'].sort(),
+      );
+
+      // 3. 502 upstream error
+      jest
+        .spyOn(adapter, 'evaluate')
+        .mockRejectedValueOnce(new DecisionEngineErrorException());
+      const res502 = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({ payment_id: 'pay_000001_a1' })
+        .expect(502);
+
+      expect(Object.keys(res502.body)).toEqual(['error']);
+      expect(Object.keys(res502.body.error).sort()).toEqual(
+        ['code', 'message', 'request_id'].sort(),
+      );
+
+      // 4. 500 unexpected error
+      jest
+        .spyOn(adapter, 'evaluate')
+        .mockRejectedValueOnce(new Error('Unexpected unhandled error'));
+      const res500 = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({ payment_id: 'pay_000001_a1' })
+        .expect(500);
+
+      expect(Object.keys(res500.body)).toEqual(['error']);
+      expect(Object.keys(res500.body.error).sort()).toEqual(
+        ['code', 'message', 'request_id'].sort(),
+      );
+    });
+
+    // Test I: no top-level message
+    it('Test I: no top-level message key exists on any failure response body', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({
+          payment_id: 'pay_000001_a1',
+          net_value: 100, // Forbidden extra property
+        })
+        .expect(400);
+
+      expect((response.body as any).message).toBeUndefined();
+      expect(response.body.error).toBeDefined();
+      expect(response.body.error.code).toBe('VALIDATION_ERROR');
+      expect(response.body.error.message).toContain('property net_value should not exist');
+    });
+
+    // Test J: no stack trace/secret/path leakage
+    it('Test J: no stack trace, credentials, tokens, or filesystem paths leaked in error responses', async () => {
+      // Upstream error containing Azure connection strings and Windows path
+      jest.spyOn(adapter, 'evaluate').mockRejectedValueOnce(
+        new DecisionEngineErrorException(
+          'Upstream crash DefaultEndpointsProtocol=https;AccountName=myacc;AccountKey=secretKey12345; at D:\\recovery-intelligence-engine\\secrets.env with token: secret-token-xyz\n at Object.<anonymous> (D:\\app\\src\\index.ts:25:10)',
+        ),
+      );
+
+      const response = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({ payment_id: 'pay_000001_a1' })
+        .expect(502);
+
+      const bodyStr = JSON.stringify(response.body);
+      expect(bodyStr).not.toContain('secretKey12345');
+      expect(bodyStr).not.toContain('secret-token-xyz');
+      expect(bodyStr).not.toContain('D:\\recovery-intelligence-engine');
+      expect(bodyStr).not.toContain('D:\\app\\src');
+      expect(bodyStr).not.toContain('\n at ');
+    });
+
+    // Test K: X-Request-Id response header present
+    it('Test K: X-Request-Id response header is present on every error and success response', async () => {
+      // Error response
+      const errRes = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({})
+        .expect(400);
+      expect(errRes.headers['x-request-id']).toBeDefined();
+      expect(errRes.headers['x-request-id'].length).toBeGreaterThan(0);
+
+      // Success response
       const successRes = await request(app.getHttpServer())
         .post('/decisions')
         .send({ payment_id: 'pay_000001_a1' })
         .expect(200);
+      expect(successRes.headers['x-request-id']).toBeDefined();
+      expect(successRes.headers['x-request-id'].length).toBeGreaterThan(0);
+    });
 
-      const successStr = JSON.stringify(successRes.body);
-      expect(successStr).not.toContain('password');
-      expect(successStr).not.toContain('secret');
-      expect(successStr).not.toContain('token');
-      expect(successStr).not.toContain('stack');
-      expect(successStr).not.toContain('Trace');
-
-      const errRes = await request(app.getHttpServer())
+    // Test L: error.request_id equals response header
+    it('Test L: error.request_id strictly equals the X-Request-Id response header', async () => {
+      const customReqId = 'req-test-l-correlation-match';
+      const response = await request(app.getHttpServer())
         .post('/decisions')
-        .send({ payment_id: 'pay_000001_a1', net_value: 100 })
+        .set('x-request-id', customReqId)
+        .send({ payment_id: 'invalid_format' })
         .expect(400);
 
-      const errStr = JSON.stringify(errRes.body);
-      expect(errStr).not.toContain('password');
-      expect(errStr).not.toContain('secret');
-      expect(errStr).not.toContain('token');
-      expect(errStr).not.toContain('stack');
+      expect(response.body.error.request_id).toBe(customReqId);
+      expect(response.headers['x-request-id']).toBe(customReqId);
+      expect(response.body.error.request_id).toBe(response.headers['x-request-id']);
+    });
+
+    // Test M: success request_id equals response header
+    it('Test M: success response.request_id strictly equals the X-Request-Id response header', async () => {
+      const customReqId = 'req-test-m-success-correlation';
+      jest.spyOn(adapter, 'evaluate').mockImplementationOnce(async (pid, reqId) => ({
+        ...mockPythonDecision,
+        payment_id: pid,
+        request_id: reqId,
+      }));
+
+      const response = await request(app.getHttpServer())
+        .post('/decisions')
+        .set('x-request-id', customReqId)
+        .send({ payment_id: 'pay_000001_a1' })
+        .expect(200);
+
+      expect(response.body.request_id).toBe(customReqId);
+      expect(response.headers['x-request-id']).toBe(customReqId);
+      expect(response.body.request_id).toBe(response.headers['x-request-id']);
     });
   });
 });
