@@ -27,6 +27,7 @@ CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS decision_audit (
     payment_id TEXT PRIMARY KEY,
     decision_id TEXT NOT NULL,
+    request_id TEXT,
     raw_arm_probabilities TEXT,
     raw_arm_net_values TEXT,
     llm_proposed_decision TEXT,
@@ -47,6 +48,7 @@ UPSERT_SQL = """
 INSERT INTO decision_audit (
     payment_id,
     decision_id,
+    request_id,
     raw_arm_probabilities,
     raw_arm_net_values,
     llm_proposed_decision,
@@ -60,9 +62,10 @@ INSERT INTO decision_audit (
     decision_source,
     error_status,
     timestamp
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(payment_id) DO UPDATE SET
     decision_id=excluded.decision_id,
+    request_id=excluded.request_id,
     raw_arm_probabilities=excluded.raw_arm_probabilities,
     raw_arm_net_values=excluded.raw_arm_net_values,
     llm_proposed_decision=excluded.llm_proposed_decision,
@@ -80,7 +83,7 @@ ON CONFLICT(payment_id) DO UPDATE SET
 
 
 def init_audit_db(db_path: pathlib.Path | str | None = None) -> str:
-    """Ensure SQLite audit database and table exist."""
+    """Ensure SQLite audit database and table exist with additive migration."""
     path_str = str(db_path) if db_path is not None else str(DEFAULT_AUDIT_DB_PATH)
     if path_str != ":memory:":
         parent = pathlib.Path(path_str).parent
@@ -88,6 +91,9 @@ def init_audit_db(db_path: pathlib.Path | str | None = None) -> str:
 
     with sqlite3.connect(path_str) as conn:
         conn.execute(CREATE_TABLE_SQL)
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(decision_audit)").fetchall()]
+        if "request_id" not in cols:
+            conn.execute("ALTER TABLE decision_audit ADD COLUMN request_id TEXT;")
         conn.commit()
     return path_str
 
@@ -95,6 +101,7 @@ def init_audit_db(db_path: pathlib.Path | str | None = None) -> str:
 def save_decision_audit(
     state: RecoveryState,
     db_path: pathlib.Path | str | None = None,
+    request_id: Optional[str] = None,
 ) -> Decision:
     """
     Persist full decision record to SQLite audit database using UPSERT semantics.
@@ -105,6 +112,8 @@ def save_decision_audit(
         Completed workflow state.
     db_path : pathlib.Path | str, optional
         Custom database path (for test isolation).
+    request_id : str, optional
+        HTTP request correlation ID.
 
     Returns
     -------
@@ -115,6 +124,7 @@ def save_decision_audit(
 
     payment_id = state.get("payment_id") or "UNKNOWN_PAYMENT"
     decision_id = f"dec_{payment_id}"
+    req_id = request_id or state.get("request_id") or ""
 
     # Extract state fields
     error = state.get("error")
@@ -171,6 +181,7 @@ def save_decision_audit(
             (
                 payment_id,
                 decision_id,
+                req_id,
                 raw_arm_probas_json,
                 raw_arm_net_json,
                 llm_proposed,
@@ -187,6 +198,91 @@ def save_decision_audit(
             ),
         )
         conn.commit()
+
+    return decision_entity
+
+
+async def async_save_decision_audit(
+    state: RecoveryState,
+    db: Any,
+    request_id: Optional[str] = None,
+) -> Decision:
+    """
+    Persist full decision record to SQLite audit database asynchronously using the shared DB connection.
+    """
+    payment_id = state.get("payment_id") or "UNKNOWN_PAYMENT"
+    decision_id = f"dec_{payment_id}"
+    req_id = request_id or state.get("request_id") or ""
+
+    error = state.get("error")
+    is_error_path = bool(error)
+
+    llm_decision = state.get("llm_decision", {})
+    guardrail_result = state.get("guardrail_result", {})
+
+    final_action_raw = state.get("final_action", "WAIT")
+    try:
+        action_enum = Action(final_action_raw)
+    except (ValueError, KeyError):
+        action_enum = Action.WAIT
+
+    if is_error_path:
+        llm_proposed = "N/A — error path"
+        llm_confidence = 0.0
+        llm_reasoning = f"Error path: {error}"
+        llm_risk = "none"
+        expected_val = 0.0
+        guardrail_verdict = "N/A — error path"
+        guardrail_reason = "Bypassed due to error"
+        decision_source = "error_path"
+    else:
+        llm_proposed = llm_decision.get("decision", "WAIT")
+        llm_confidence = float(llm_decision.get("confidence", 1.0))
+        llm_reasoning = llm_decision.get("reasoning", "")
+        llm_risk = llm_decision.get("risk_level", "medium")
+        expected_val = float(llm_decision.get("expected_incremental_value", 0.0))
+        guardrail_verdict = guardrail_result.get("status", "passed")
+        guardrail_reason = guardrail_result.get("reason", "")
+        decision_source = llm_decision.get("decision_source", "llm")
+
+    raw_arm_probas_json = json.dumps(state.get("arm_probabilities", {}))
+    raw_arm_net_json = json.dumps(state.get("arm_net_values", {}))
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    decision_entity = Decision(
+        decision_id=decision_id,
+        payment_id=payment_id,
+        action=action_enum,
+        confidence=llm_confidence,
+        expected_incremental_value=expected_val,
+        numeric_source=decision_source,
+        reasoning=llm_reasoning,
+        risk_level=llm_risk,
+        model_version="gpt-4.1-mini",
+    )
+
+    await db.execute(
+        UPSERT_SQL,
+        (
+            payment_id,
+            decision_id,
+            req_id,
+            raw_arm_probas_json,
+            raw_arm_net_json,
+            llm_proposed,
+            llm_confidence,
+            llm_reasoning,
+            llm_risk,
+            expected_val,
+            guardrail_verdict,
+            guardrail_reason,
+            action_enum.value,
+            decision_source,
+            error,
+            now_iso,
+        ),
+    )
+    await db.commit()
 
     return decision_entity
 

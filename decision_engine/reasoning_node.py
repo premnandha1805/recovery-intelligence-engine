@@ -9,8 +9,10 @@ over causal uplift estimates using the gpt-4.1-mini deployment.
 
 from __future__ import annotations
 
+import asyncio
 import os
-from typing import Any, Literal
+import time
+from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
@@ -296,3 +298,214 @@ def reasoning_node(
         arm_net_values=arm_net_values,
         reason=combined_reason,
     )
+
+
+async def async_reasoning_node(
+    state: RecoveryState,
+    llm: Any = None,
+    deadline: Optional[float] = None,
+    semaphore: Optional[asyncio.Semaphore] = None,
+    config: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """
+    Asynchronous reasoning node using Azure AI Foundry with native async invocation,
+    shared request deadline bounding, and semaphore concurrency control.
+
+    Parameters
+    ----------
+    state : RecoveryState
+        Current LangGraph workflow state.
+    llm : Any, optional
+        Injected LLM instance for testing without external network calls.
+    deadline : float, optional
+        Monotonic deadline timestamp (time.monotonic()) for the request.
+    semaphore : asyncio.Semaphore, optional
+        Concurrency semaphore for LLM calls.
+    config : dict, optional
+        LangGraph RunnableConfig containing configurable runtime parameters.
+
+    Returns
+    -------
+    dict[str, Any]
+        Partial state dictionary update.
+    """
+    configurable = (config.get("configurable", {}) if config else {})
+    effective_deadline = deadline if deadline is not None else configurable.get("llm_deadline")
+    effective_semaphore = semaphore if semaphore is not None else configurable.get("llm_semaphore")
+    request_id = configurable.get("request_id")
+
+    def _attach_request_id(update_dict: dict[str, Any]) -> dict[str, Any]:
+        if request_id and "audit_trail" in update_dict:
+            for ev in update_dict["audit_trail"]:
+                ev["request_id"] = request_id
+        return update_dict
+
+    if state.get("error"):
+        return _attach_request_id({
+            "final_action": "WAIT",
+            "audit_trail": [
+                {
+                    "node": "reasoning_node",
+                    "status": "skipped",
+                    "reason": f"Skipped due to prior error: {state.get('error')}",
+                }
+            ],
+        })
+
+    observable_features = state.get("observable_features", {})
+    arm_probabilities = state.get("arm_probabilities", {})
+    arm_net_values = state.get("arm_net_values", {})
+    permitted_actions = state.get("permitted_actions", ["WAIT"])
+
+    if not permitted_actions:
+        permitted_actions = ["WAIT"]
+
+    active_llm = llm if llm is not None else get_foundry_chat_model()
+    structured_llm = active_llm.with_structured_output(LLMDecision)
+
+    base_prompt = _build_prompt(
+        observable_features=observable_features,
+        arm_probabilities=arm_probabilities,
+        arm_net_values=arm_net_values,
+        permitted_actions=permitted_actions,
+    )
+
+    async def _call_llm_async(prompt_str: str) -> Any:
+        # 1. Check remaining deadline before semaphore acquisition
+        if effective_deadline is not None:
+            remaining = effective_deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("Deadline exceeded before acquiring LLM semaphore slot")
+        else:
+            remaining = None
+
+        # 2. Acquire semaphore if provided
+        sem_acquired = False
+        if effective_semaphore is not None:
+            if remaining is not None:
+                await asyncio.wait_for(effective_semaphore.acquire(), timeout=remaining)
+            else:
+                await effective_semaphore.acquire()
+            sem_acquired = True
+
+        try:
+            # 3. Re-check remaining deadline after acquiring semaphore
+            if effective_deadline is not None:
+                call_remaining = effective_deadline - time.monotonic()
+                if call_remaining <= 0:
+                    raise asyncio.TimeoutError("Deadline exceeded while waiting for LLM semaphore slot")
+            else:
+                call_remaining = None
+
+            # 4. Invoke LLM asynchronously using native ainvoke (or to_thread fallback for sync test mocks)
+            if hasattr(structured_llm, "ainvoke"):
+                coro = structured_llm.ainvoke(prompt_str)
+            else:
+                coro = asyncio.to_thread(structured_llm.invoke, prompt_str)
+
+            if call_remaining is not None:
+                return await asyncio.wait_for(coro, timeout=call_remaining)
+            else:
+                return await coro
+        finally:
+            if sem_acquired:
+                effective_semaphore.release()
+
+    # ── Attempt 1 ─────────────────────────────────────────────────────────────
+    parsed_output = None
+    attempt1_error = None
+
+    try:
+        res = await _call_llm_async(base_prompt)
+        if res.decision not in permitted_actions:
+            attempt1_error = (
+                f"Proposed decision {res.decision!r} is not in permitted_actions {permitted_actions}"
+            )
+        else:
+            parsed_output = res
+    except Exception as exc:
+        attempt1_error = f"Attempt 1 failed: {exc}"
+
+    if parsed_output is not None:
+        chosen_action = parsed_output.decision
+        expected_val = float(arm_net_values.get(chosen_action, 0.0))
+
+        decision_data = {
+            "decision": chosen_action,
+            "confidence": float(parsed_output.confidence),
+            "reasoning": parsed_output.reasoning,
+            "risk_level": parsed_output.risk_level,
+            "expected_incremental_value": expected_val,
+            "decision_source": "llm",
+        }
+
+        return _attach_request_id({
+            "llm_decision": decision_data,
+            "final_action": chosen_action,
+            "audit_trail": [
+                {
+                    "node": "reasoning_node",
+                    "status": "success",
+                    "attempt": 1,
+                    "decision": chosen_action,
+                    "decision_source": "llm",
+                    "expected_incremental_value": expected_val,
+                }
+            ],
+        })
+
+    # ── Attempt 2 (Retry with explicit correction message) ────────────────────
+    attempt2_error = None
+    correction_prompt = (
+        f"{base_prompt}\n\n"
+        f"CORRECTION REQUIRED: Your previous output was rejected with error: {attempt1_error}.\n"
+        f"You MUST select an action strictly from: {permitted_actions}. Do not deviate."
+    )
+
+    try:
+        res_retry = await _call_llm_async(correction_prompt)
+        if res_retry.decision not in permitted_actions:
+            attempt2_error = (
+                f"Attempt 2 rejected: decision {res_retry.decision!r} not in {permitted_actions}"
+            )
+        else:
+            chosen_action = res_retry.decision
+            expected_val = float(arm_net_values.get(chosen_action, 0.0))
+
+            decision_data = {
+                "decision": chosen_action,
+                "confidence": float(res_retry.confidence),
+                "reasoning": res_retry.reasoning,
+                "risk_level": res_retry.risk_level,
+                "expected_incremental_value": expected_val,
+                "decision_source": "llm_retry_success",
+            }
+
+            return _attach_request_id({
+                "llm_decision": decision_data,
+                "final_action": chosen_action,
+                "audit_trail": [
+                    {
+                        "node": "reasoning_node",
+                        "status": "success",
+                        "attempt": 2,
+                        "decision": chosen_action,
+                        "decision_source": "llm_retry_success",
+                        "expected_incremental_value": expected_val,
+                    }
+                ],
+            })
+    except Exception as exc:
+        attempt2_error = f"Attempt 2 failed: {exc}"
+
+    # ── Fallback (Both attempts failed) ───────────────────────────────────────
+    combined_reason = f"Attempt 1: {attempt1_error} | Attempt 2: {attempt2_error}"
+    return _attach_request_id(
+        _execute_fallback(
+            state=state,
+            permitted_actions=permitted_actions,
+            arm_net_values=arm_net_values,
+            reason=combined_reason,
+        )
+    )
+

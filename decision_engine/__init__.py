@@ -17,7 +17,7 @@ from decision_engine.guardrails import (
 from decision_engine.state import RecoveryState
 from decision_engine.context_node import context_node
 from decision_engine.estimation_node import estimation_node
-from decision_engine.reasoning_node import LLMDecision, reasoning_node
+from decision_engine.reasoning_node import LLMDecision, reasoning_node, async_reasoning_node
 from decision_engine.guardrail_node import guardrail_node
 from decision_engine.execution_node import execution_node
 from decision_engine.audit import (
@@ -45,6 +45,7 @@ __all__ = [
     "estimation_node",
     "LLMDecision",
     "reasoning_node",
+    "async_reasoning_node",
     "guardrail_node",
     "execution_node",
     "init_audit_db",

@@ -15,6 +15,7 @@ from decision_engine.state import RecoveryState
 def execution_node(
     state: RecoveryState,
     db_path: pathlib.Path | str | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Perform mock execution of the final action and persist audit record to SQLite.
@@ -25,6 +26,8 @@ def execution_node(
         Completed workflow state after guardrails (or after error short-circuit).
     db_path : pathlib.Path | str, optional
         Custom SQLite audit database path.
+    request_id : str, optional
+        HTTP request correlation ID.
 
     Returns
     -------
@@ -33,9 +36,10 @@ def execution_node(
     """
     final_action = state.get("final_action", "WAIT")
     error = state.get("error")
+    req_id = request_id or state.get("request_id")
 
     # Persist decision to SQLite audit database
-    save_decision_audit(state, db_path=db_path)
+    save_decision_audit(state, db_path=db_path, request_id=req_id)
 
     status_str = "error_halted" if error else "executed"
 
@@ -45,6 +49,8 @@ def execution_node(
         "final_action": final_action,
         "payment_id": state.get("payment_id"),
     }
+    if req_id:
+        audit_event["request_id"] = req_id
     if error:
         audit_event["error"] = error
 
