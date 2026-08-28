@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -15,6 +16,9 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // Global Exception Filter: maps errors to shared envelope (400, 502, 503)
+  app.useGlobalFilters(new HttpExceptionFilter());
 
   // Enable shutdown hooks for graceful termination [FIX-8]
   app.enableShutdownHooks();
