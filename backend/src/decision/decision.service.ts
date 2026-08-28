@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Request } from 'express';
 import { DecisionEngineAdapter } from '../decision-engine/decision-engine.adapter';
@@ -9,10 +9,11 @@ import {
   DecisionEngineTimeoutException,
   DecisionEngineUnavailableException,
 } from '../common/exceptions/decision-engine.exceptions';
+import { StructuredLogger } from '../common/logging/structured-logger';
 
 @Injectable()
 export class DecisionService {
-  private readonly logger = new Logger(DecisionService.name);
+  private readonly structuredLogger = new StructuredLogger(DecisionService.name);
 
   constructor(
     private readonly decisionEngineAdapter: DecisionEngineAdapter,
@@ -27,7 +28,7 @@ export class DecisionService {
    * - Calls DecisionEngineAdapter.evaluate(payment_id, request_id, force_recompute).
    * - Maps Python result 1:1 into stable DecisionResponseDto.
    * - Preserves guardrail_overridden and guardrail_reason verbatim.
-   * - Logs execution duration_ms and final_action.
+   * - Emits structured JSON events traceable by request_id [Day 7G].
    * - Never computes probabilities, calls LLM, evaluates guardrails, or accesses DB directly.
    */
   async createDecision(
@@ -49,13 +50,31 @@ export class DecisionService {
 
     const forceRecompute = dto.force_recompute ?? false;
 
+    // Event A: request_received
+    this.structuredLogger.log('request_received', requestId, {
+      payment_id: dto.payment_id,
+      force_recompute: forceRecompute,
+    });
+
     let pythonResult;
+    const adapterStartTime = Date.now();
     try {
+      // Event B: decision_engine_request_started
+      this.structuredLogger.log('decision_engine_request_started', requestId, {
+        payment_id: dto.payment_id,
+      });
+
       pythonResult = await this.decisionEngineAdapter.evaluate(
         dto.payment_id,
         requestId,
         forceRecompute,
       );
+
+      // Event C: decision_engine_request_completed
+      this.structuredLogger.log('decision_engine_request_completed', requestId, {
+        payment_id: dto.payment_id,
+        duration_ms: Date.now() - adapterStartTime,
+      });
     } catch (err: any) {
       // Ensure decision engine exceptions carry the correlated requestId for exception filter
       if (err instanceof DecisionEngineUnavailableException && !err.requestId) {
@@ -92,10 +111,16 @@ export class DecisionService {
     };
 
     const durationMs = Date.now() - startTime;
-    this.logger.log(
-      `[${requestId}] Decision completed in ${durationMs}ms for ${dto.payment_id}: final_action=${responseDto.final_action}`,
-    );
+
+    // Event D: decision_completed
+    this.structuredLogger.log('decision_completed', requestId, {
+      payment_id: dto.payment_id,
+      final_action: responseDto.final_action,
+      guardrail_overridden: responseDto.guardrail_overridden,
+      duration_ms: durationMs,
+    });
 
     return responseDto;
   }
 }
+

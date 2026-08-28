@@ -32,6 +32,7 @@ Complete Workflow Architecture:
 from __future__ import annotations
 
 import asyncio
+import logging
 import pathlib
 from typing import Any, Literal
 from langgraph.graph import StateGraph, START, END
@@ -44,6 +45,10 @@ from decision_engine.reasoning_node import reasoning_node, async_reasoning_node
 from decision_engine.guardrail_node import guardrail_node
 from decision_engine.execution_node import execution_node
 from decision_engine.audit import async_save_decision_audit
+from decision_engine.structured_logger import emit_log
+
+logger = logging.getLogger("decision_engine.graph")
+
 
 
 def error_fallback_node(state: RecoveryState) -> dict[str, Any]:
@@ -168,7 +173,18 @@ def create_recovery_graph(
             if req_id and "audit_trail" in res:
                 for ev in res["audit_trail"]:
                     ev["request_id"] = req_id
+            payment_id = state.get("payment_id", "")
+            decision_id = f"dec_{payment_id}"
+            emit_log(
+                logger,
+                logging.INFO,
+                "audit_persisted",
+                req_id or "",
+                payment_id=payment_id,
+                decision_id=decision_id,
+            )
             return res
+
 
     else:
         # Day 7 asynchronous execution path with RunnableConfig runtime context
@@ -221,6 +237,17 @@ def create_recovery_graph(
 
             final_action = state.get("final_action", "WAIT")
             error = state.get("error")
+            payment_id = state.get("payment_id", "")
+            decision_id = f"dec_{payment_id}"
+            emit_log(
+                logger,
+                logging.INFO,
+                "audit_persisted",
+                req_id or "",
+                payment_id=payment_id,
+                decision_id=decision_id,
+            )
+
             status_str = "error_halted" if error else "executed"
             audit_event = {
                 "node": "execution_node",
@@ -236,6 +263,7 @@ def create_recovery_graph(
                 "final_action": final_action,
                 "audit_trail": [audit_event],
             }
+
 
     builder.add_node("context", run_context)
     builder.add_node("estimation", run_estimation)

@@ -135,17 +135,66 @@ describe('DecisionService', () => {
       expect(result.final_action).toBe('WAIT');
     });
 
-    it('should log execution duration_ms and final_action', async () => {
+    it('should emit structured JSON logs for request lifecycle with consistent request_id', async () => {
       const loggerSpy = jest.spyOn(Logger.prototype, 'log');
 
-      await service.createDecision({
-        payment_id: 'pay_000001_a1',
-      });
-
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/Decision completed in \d+ms for pay_000001_a1: final_action=RETRY_NUDGE/),
+      const customReqId = 'req-test-uuid-123';
+      const result = await service.createDecision(
+        {
+          payment_id: 'pay_000001_a1',
+          force_recompute: true,
+        },
+        customReqId,
       );
+
+      // Extract all JSON payloads logged by this request
+      const jsonCalls = loggerSpy.mock.calls
+        .map((call) => {
+          try {
+            return JSON.parse(call[0]);
+          } catch {
+            return null;
+          }
+        })
+        .filter((payload) => payload && payload.request_id === customReqId);
+
+      expect(jsonCalls.length).toBeGreaterThanOrEqual(4);
+
+      // 1. Every event contains required contract fields
+      for (const logItem of jsonCalls) {
+        expect(logItem.service).toBe('nestjs');
+        expect(logItem.request_id).toBe(customReqId);
+        expect(typeof logItem.timestamp).toBe('string');
+        expect(typeof logItem.event).toBe('string');
+      }
+
+      // 2. Events match required sequence: request_received, decision_engine_request_started, decision_engine_request_completed, decision_completed
+      const events = jsonCalls.map((c) => c.event);
+      expect(events).toContain('request_received');
+      expect(events).toContain('decision_engine_request_started');
+      expect(events).toContain('decision_engine_request_completed');
+      expect(events).toContain('decision_completed');
+
+      // 3. Verify event fields
+      const received = jsonCalls.find((c) => c.event === 'request_received');
+      expect(received.payment_id).toBe('pay_000001_a1');
+      expect(received.force_recompute).toBe(true);
+
+      const deStarted = jsonCalls.find((c) => c.event === 'decision_engine_request_started');
+      expect(deStarted.payment_id).toBe('pay_000001_a1');
+
+      const deCompleted = jsonCalls.find((c) => c.event === 'decision_engine_request_completed');
+      expect(deCompleted.payment_id).toBe('pay_000001_a1');
+      expect(typeof deCompleted.duration_ms).toBe('number');
+
+      const completed = jsonCalls.find((c) => c.event === 'decision_completed');
+      expect(completed.payment_id).toBe('pay_000001_a1');
+      expect(completed.final_action).toBe('RETRY_NUDGE');
+      expect(completed.guardrail_overridden).toBe(false);
+      expect(typeof completed.duration_ms).toBe('number');
+      expect(completed.request_id).toBe(result.request_id);
     });
+
 
     it('should propagate DecisionEngineUnavailableException (503) and attach correlated requestId', async () => {
       jest

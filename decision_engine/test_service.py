@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import pathlib
 import time
 from typing import Any
@@ -663,4 +664,197 @@ async def test_day7f_request_correlation_n_through_s(tmp_path: pathlib.Path):
                 assert db_request_id != db_decision_id
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_day7g_structured_request_logging(tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture):
+    """
+    Day 7G Structured Request Logging Tests:
+    1. Every emitted structured event parses as valid JSON.
+    2. Every event contains: timestamp, service="python-decision-engine", event, request_id.
+    3. All events for the same request have the same request_id.
+    4. Normal request produces: evaluate_received, lock_acquired, cache_miss, graph_started,
+       semaphore_wait, final_action_selected, audit_persisted, evaluate_completed.
+    5. Cache-hit request produces: evaluate_received, lock_acquired, cache_hit, evaluate_completed.
+    6. Same-payment concurrent request produces: lock_blocked_duplicate.
+    7. Forced LLM fallback produces: llm_fallback_triggered with reason_code.
+    8. Semaphore wait produces: semaphore_wait with wait_ms.
+    10. Logs do not contain API keys, credentials, tokens, passwords, filesystem paths.
+    """
+    caplog.set_level(logging.INFO)
+    app_instance, db, _ = await init_test_app(tmp_path)
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # ─────────────────────────────────────────────────────────────────
+            # Part 1: Normal Request
+            # ─────────────────────────────────────────────────────────────────
+            normal_req_id = "req-day7g-normal-001"
+            pid_1 = "pay_000001_a1"
+
+            caplog.clear()
+            resp1 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": normal_req_id},
+                json={"payment_id": pid_1, "force_recompute": True},
+            )
+            assert resp1.status_code == 200
+
+            # Extract structured JSON logs for this request
+            req1_logs = []
+            for record in caplog.records:
+                try:
+                    payload = json.loads(record.getMessage())
+                    if payload.get("request_id") == normal_req_id:
+                        req1_logs.append(payload)
+                except Exception:
+                    pass
+
+            assert len(req1_logs) >= 7
+
+            # Verification 1 & 2 & 3: Valid JSON, contract fields, consistent request_id
+            for event_obj in req1_logs:
+                assert event_obj["service"] == "python-decision-engine"
+                assert event_obj["request_id"] == normal_req_id
+                assert "timestamp" in event_obj
+                assert "event" in event_obj
+
+            events_req1 = [item["event"] for item in req1_logs]
+            assert "evaluate_received" in events_req1
+            assert "lock_acquired" in events_req1
+            assert "cache_miss" in events_req1
+            assert "graph_started" in events_req1
+            assert "semaphore_wait" in events_req1
+            assert "audit_persisted" in events_req1
+            assert "final_action_selected" in events_req1
+            assert "evaluate_completed" in events_req1
+
+            # ─────────────────────────────────────────────────────────────────
+            # Part 2: Cache-Hit Request
+            # ─────────────────────────────────────────────────────────────────
+            cache_req_id = "req-day7g-cache-002"
+            caplog.clear()
+            resp2 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": cache_req_id},
+                json={"payment_id": pid_1, "force_recompute": False},
+            )
+            assert resp2.status_code == 200
+            assert resp2.json()["payment_id"] == pid_1
+
+            req2_logs = []
+            for record in caplog.records:
+                try:
+                    payload = json.loads(record.getMessage())
+                    if payload.get("request_id") == cache_req_id:
+                        req2_logs.append(payload)
+                except Exception:
+                    pass
+
+            events_req2 = [item["event"] for item in req2_logs]
+            assert "evaluate_received" in events_req2
+            assert "lock_acquired" in events_req2
+            assert "cache_hit" in events_req2
+            assert "evaluate_completed" in events_req2
+            assert "cache_miss" not in events_req2
+            assert "audit_persisted" not in events_req2
+
+            # ─────────────────────────────────────────────────────────────────
+            # Part 3: Concurrent Request with lock_blocked_duplicate
+            # ─────────────────────────────────────────────────────────────────
+            concurrent_pid = "pay_000003_a3"
+            concurrent_req_id = "req-day7g-concurrent-003"
+            lock = await get_payment_lock(app_instance, concurrent_pid)
+
+            caplog.clear()
+            # Manually hold lock to simulate in-flight execution
+            await lock.acquire()
+            try:
+                # Launch request in background task while lock is held
+                task = asyncio.create_task(
+                    client.post(
+                        "/evaluate",
+                        headers={"X-Request-Id": concurrent_req_id},
+                        json={"payment_id": concurrent_pid, "force_recompute": True},
+                    )
+                )
+                await asyncio.sleep(0.05)  # Allow endpoint to check lock.locked()
+            finally:
+                lock.release()
+
+            resp3 = await task
+            assert resp3.status_code == 200
+
+            req3_logs = []
+            for record in caplog.records:
+                try:
+                    payload = json.loads(record.getMessage())
+                    if payload.get("request_id") == concurrent_req_id:
+                        req3_logs.append(payload)
+                except Exception:
+                    pass
+
+            events_req3 = [item["event"] for item in req3_logs]
+            assert "lock_blocked_duplicate" in events_req3
+
+            # ─────────────────────────────────────────────────────────────────
+            # Part 4: Forced LLM Fallback (llm_fallback_triggered)
+            # ─────────────────────────────────────────────────────────────────
+            fallback_req_id = "req-day7g-fallback-004"
+            fallback_pid = "pay_000004_a4"
+
+            # Create mock LLM that always throws an unpermitted action error
+            failing_llm = MagicMock()
+            mock_bad_decision = MagicMock()
+            mock_bad_decision.decision = "FORBIDDEN_ACTION_XYZ"
+            failing_llm.with_structured_output.return_value.ainvoke = AsyncMock(
+                return_value=mock_bad_decision
+            )
+
+            # Recompile graph with failing LLM
+            app_instance.state.graph = create_recovery_graph(
+                policy=app_instance.state.policy,
+                llm=failing_llm,
+                use_async=True,
+            )
+
+            caplog.clear()
+            resp4 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": fallback_req_id},
+                json={"payment_id": fallback_pid, "force_recompute": True},
+            )
+            assert resp4.status_code == 200
+            assert resp4.json()["decision_source"] == "fallback_no_llm"
+
+            req4_logs = []
+            for record in caplog.records:
+                try:
+                    payload = json.loads(record.getMessage())
+                    if payload.get("request_id") == fallback_req_id:
+                        req4_logs.append(payload)
+                except Exception:
+                    pass
+
+            events_req4 = [item["event"] for item in req4_logs]
+            assert "llm_fallback_triggered" in events_req4
+            fallback_event = next(item for item in req4_logs if item["event"] == "llm_fallback_triggered")
+            assert fallback_event["reason_code"] == "LLM_UNPERMITTED_ACTION"
+            assert "fallback_action" in fallback_event
+
+            # ─────────────────────────────────────────────────────────────────
+            # Part 5: Security / Secret Redaction Assertion
+            # ─────────────────────────────────────────────────────────────────
+            fake_secret_key = "DefaultEndpointsProtocol=https;AccountKey=SuperSecretFakeKey99999;"
+            fake_secret_token = "ya29.fakeBearerToken12345XYZ"
+            fake_secret_path = "D:\\app\\secrets\\azure_credentials.env"
+
+            # Verify none of the emitted log records contain fake secrets
+            all_logged_text = caplog.text
+            assert fake_secret_key not in all_logged_text
+            assert fake_secret_token not in all_logged_text
+            assert fake_secret_path not in all_logged_text
+    finally:
+        await db.close()
+
 

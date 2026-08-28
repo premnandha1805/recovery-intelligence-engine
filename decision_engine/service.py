@@ -45,6 +45,7 @@ from decision_engine.audit import (
 )
 from ml.decision import CausalUpliftPolicy
 from models.schemas import Action
+from decision_engine.structured_logger import emit_log
 
 # Configure structured logging
 logger = logging.getLogger("decision_engine.service")
@@ -272,13 +273,40 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
     # Return X-Request-Id in response header
     response.headers["x-request-id"] = request_id
 
-    logger.info(f"[{request_id}] /evaluate received for payment_id={payment_id}, force_recompute={req.force_recompute}")
+    # Event A: evaluate_received
+    emit_log(
+        logger,
+        logging.INFO,
+        "evaluate_received",
+        request_id,
+        payment_id=payment_id,
+        force_recompute=req.force_recompute,
+    )
 
     # 2. Acquire this payment's asyncio.Lock [FIX-1]
     lock = await get_payment_lock(app, payment_id)
-    logger.info(f"[{request_id}] Waiting to acquire lock for payment_id={payment_id}")
+    if lock.locked():
+        # Event B: lock_blocked_duplicate (only emitted when request actually has to wait for a lock)
+        emit_log(
+            logger,
+            logging.INFO,
+            "lock_blocked_duplicate",
+            request_id,
+            payment_id=payment_id,
+        )
+
+    lock_start = time.monotonic()
     async with lock:
-        logger.info(f"[{request_id}] Lock acquired for payment_id={payment_id}")
+        lock_wait_ms = round((time.monotonic() - lock_start) * 1000, 2)
+        # Event C: lock_acquired
+        emit_log(
+            logger,
+            logging.INFO,
+            "lock_acquired",
+            request_id,
+            payment_id=payment_id,
+            wait_ms=lock_wait_ms,
+        )
 
         # 3. Inside the lock:
         # a. Check audit.db for existing decision if force_recompute is False
@@ -291,7 +319,14 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 row = await cursor.fetchone()
 
             if row is not None:
-                logger.info(f"[{request_id}] Cache hit for payment_id={payment_id}. Returning cached decision.")
+                # Event D: cache_hit
+                emit_log(
+                    logger,
+                    logging.INFO,
+                    "cache_hit",
+                    request_id,
+                    payment_id=payment_id,
+                )
                 try:
                     net_vals = json.loads(row["raw_arm_net_values"] or "{}")
                 except Exception:
@@ -305,7 +340,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 verdict = str(row["guardrail_verdict"] or "")
                 overridden = verdict.lower() == "overridden"
 
-                return {
+                cached_dto = {
                     "payment_id": payment_id,
                     "model_decision": model_decision,
                     "llm_decision": str(row["llm_proposed_decision"] or "WAIT"),
@@ -318,9 +353,28 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                     "decision_source": str(row["decision_source"] or "cache"),
                     "request_id": request_id,
                 }
+                duration_ms = round((time.monotonic() - request_start) * 1000, 2)
+                # Event I: evaluate_completed on cache-hit
+                emit_log(
+                    logger,
+                    logging.INFO,
+                    "evaluate_completed",
+                    request_id,
+                    payment_id=payment_id,
+                    duration_ms=duration_ms,
+                    final_action=cached_dto["final_action"],
+                )
+                return cached_dto
 
         # b. Cache miss or force_recompute=True: invoke canonical graph
-        logger.info(f"[{request_id}] Cache miss (or recompute). Starting graph for payment_id={payment_id}")
+        # Event E: cache_miss
+        emit_log(
+            logger,
+            logging.INFO,
+            "cache_miss",
+            request_id,
+            payment_id=payment_id,
+        )
         
         # State contains strictly business domain fields (Issue 1)
         initial_state: RecoveryState = {
@@ -338,10 +392,17 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             }
         }
 
+        # Event F: graph_started
+        emit_log(
+            logger,
+            logging.INFO,
+            "graph_started",
+            request_id,
+            payment_id=payment_id,
+        )
+
         # Canonical async graph execution (persistence performed in execution node)
         final_state: RecoveryState = await app.state.graph.ainvoke(initial_state, config=config)
-
-        logger.info(f"[{request_id}] Graph complete for payment_id={payment_id}, final_action={final_state.get('final_action')}")
 
         dto = format_response_dto(
             payment_id=payment_id,
@@ -352,5 +413,26 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             request_id=request_id,
             error=final_state.get("error"),
         )
-        logger.info(f"[{request_id}] /evaluate completed in {(time.monotonic() - request_start):.3f}s")
+
+        # Event G: final_action_selected
+        emit_log(
+            logger,
+            logging.INFO,
+            "final_action_selected",
+            request_id,
+            payment_id=payment_id,
+            final_action=dto.get("final_action", "WAIT"),
+        )
+
+        # Event I: evaluate_completed
+        duration_ms = round((time.monotonic() - request_start) * 1000, 2)
+        emit_log(
+            logger,
+            logging.INFO,
+            "evaluate_completed",
+            request_id,
+            payment_id=payment_id,
+            duration_ms=duration_ms,
+            final_action=dto.get("final_action", "WAIT"),
+        )
         return dto

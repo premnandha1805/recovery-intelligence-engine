@@ -13,6 +13,7 @@ import {
   DecisionEngineTimeoutException,
   DecisionEngineUnavailableException,
 } from '../exceptions/decision-engine.exceptions';
+import { StructuredLogger } from '../logging/structured-logger';
 
 export type ErrorCode =
   | 'VALIDATION_ERROR'
@@ -60,7 +61,7 @@ function sanitizeErrorMessage(msg: string): string {
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(HttpExceptionFilter.name);
+  private readonly structuredLogger = new StructuredLogger(HttpExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -144,7 +145,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
         }
       }
     } else {
-      this.logger.error(`Unhandled non-HTTP exception: ${exception}`);
       status = HttpStatus.INTERNAL_SERVER_ERROR;
       code = 'INTERNAL_ERROR';
       message = 'Internal server error';
@@ -186,6 +186,19 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // Return X-Request-Id: <resolved request_id> on every response
     response.setHeader('x-request-id', requestId);
 
+    const paymentId =
+      typeof (request?.body as any)?.payment_id === 'string'
+        ? (request?.body as any).payment_id
+        : undefined;
+
+    // Event E: request_error (structured JSON logging)
+    this.structuredLogger.error('request_error', requestId, {
+      payment_id: paymentId,
+      code,
+      status,
+      message,
+    });
+
     // Strict error envelope: contains ONLY the "error" top-level key
     const errorBody: ErrorEnvelope = {
       error: {
@@ -198,4 +211,5 @@ export class HttpExceptionFilter implements ExceptionFilter {
     response.status(status).json(errorBody);
   }
 }
+
 

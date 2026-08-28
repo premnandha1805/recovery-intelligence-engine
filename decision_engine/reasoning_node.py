@@ -10,6 +10,7 @@ over causal uplift estimates using the gpt-4.1-mini deployment.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from typing import Any, Literal, Optional
@@ -17,12 +18,31 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 from decision_engine.state import RecoveryState
+from decision_engine.structured_logger import emit_log
+
+logger = logging.getLogger("decision_engine.reasoning_node")
 
 # Pinned deployment name
 FOUNDRY_MODEL_NAME = "gpt-4.1-mini"
 
 
+def sanitize_fallback_reason_code(raw_reason: str) -> str:
+    """
+    Map raw fallback error/exception string to a safe, short, operational reason code.
+    Never exposes raw exception strings or prompt contents.
+    """
+    text = (raw_reason or "").lower()
+    if "timeout" in text or "deadline" in text:
+        return "LLM_TIMEOUT"
+    if "not in permitted" in text or "not in [" in text or "unpermitted" in text:
+        return "LLM_UNPERMITTED_ACTION"
+    if "validation" in text or "schema" in text or "pydantic" in text or "parse" in text or "rejected" in text:
+        return "LLM_VALIDATION_ERROR"
+    return "LLM_CALL_ERROR"
+
+
 class LLMDecision(BaseModel):
+
     """
     Pydantic schema for structured reasoning output.
     Note: expected_incremental_value is strictly omitted from the prompt/schema
@@ -115,6 +135,7 @@ def _execute_fallback(
     permitted_actions: list[str],
     arm_net_values: dict[str, float],
     reason: str,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute deterministic fallback by taking argmax over permitted arm net values."""
     # Ensure we only consider permitted actions
@@ -134,6 +155,17 @@ def _execute_fallback(
         "expected_incremental_value": expected_val,
         "decision_source": "fallback_no_llm",
     }
+
+    # Emit structured event on deterministic fallback with sanitized reason code [Day 7G]
+    reason_code = sanitize_fallback_reason_code(reason)
+    emit_log(
+        logger,
+        logging.WARNING,
+        "llm_fallback_triggered",
+        request_id or "",
+        reason_code=reason_code,
+        fallback_action=fallback_action,
+    )
 
     return {
         "llm_decision": fallback_decision,
@@ -381,12 +413,22 @@ async def async_reasoning_node(
 
         # 2. Acquire semaphore if provided
         sem_acquired = False
+        sem_wait_start = time.monotonic()
         if effective_semaphore is not None:
             if remaining is not None:
                 await asyncio.wait_for(effective_semaphore.acquire(), timeout=remaining)
             else:
                 await effective_semaphore.acquire()
             sem_acquired = True
+            sem_wait_ms = round((time.monotonic() - sem_wait_start) * 1000, 2)
+            emit_log(
+                logger,
+                logging.INFO,
+                "semaphore_wait",
+                request_id or "",
+                wait_ms=sem_wait_ms,
+            )
+
 
         try:
             # 3. Re-check remaining deadline after acquiring semaphore
@@ -506,6 +548,8 @@ async def async_reasoning_node(
             permitted_actions=permitted_actions,
             arm_net_values=arm_net_values,
             reason=combined_reason,
+            request_id=request_id,
         )
     )
+
 

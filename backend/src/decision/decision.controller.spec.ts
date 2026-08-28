@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication, Logger, ValidationPipe } from '@nestjs/common';
 import * as request from 'supertest';
 import { DecisionModule } from './decision.module';
 import { DecisionResponseDto } from './dto/decision-response.dto';
@@ -412,5 +412,70 @@ describe('DecisionController (Day 7F e2e contract, error envelope & request corr
       expect(response.headers['x-request-id']).toBe(customReqId);
       expect(response.body.request_id).toBe(response.headers['x-request-id']);
     });
+
+    // Day 7G Test 9: NestJS error emits request_error
+    it('Day 7G Test 9: NestJS error emits structured request_error event with required contract fields', async () => {
+      const errorSpy = jest.spyOn(Logger.prototype, 'error');
+
+      const customReqId = 'req-test-day7g-error-log-888';
+      await request(app.getHttpServer())
+        .post('/decisions')
+        .set('x-request-id', customReqId)
+        .send({ payment_id: 'invalid_format' })
+        .expect(400);
+
+      const jsonErrors = errorSpy.mock.calls
+        .map((call) => {
+          try {
+            return JSON.parse(call[0]);
+          } catch {
+            return null;
+          }
+        })
+        .filter((item) => item && item.request_id === customReqId);
+
+      expect(jsonErrors.length).toBeGreaterThanOrEqual(1);
+      const errLog = jsonErrors.find((e) => e.event === 'request_error');
+      expect(errLog).toBeDefined();
+      expect(errLog.service).toBe('nestjs');
+      expect(errLog.code).toBe('VALIDATION_ERROR');
+      expect(errLog.status).toBe(400);
+      expect(errLog.payment_id).toBe('invalid_format');
+      expect(errLog.request_id).toBe(customReqId);
+      expect(typeof errLog.timestamp).toBe('string');
+      expect(typeof errLog.message).toBe('string');
+    });
+
+    // Day 7G Test 10: Logs do not contain API keys, Azure credentials, tokens, passwords, paths
+    it('Day 7G Test 10: Logs do not contain secrets, tokens, Azure credentials, or filesystem paths', async () => {
+      const errorSpy = jest.spyOn(Logger.prototype, 'error');
+
+      const customReqId = 'req-test-day7g-no-leaks-999';
+      const fakeSecretMsg =
+        'Failed at C:\\app\\secrets\\key.pem with DefaultEndpointsProtocol=https;AccountName=secretAcc;AccountKey=SuperSecret123; and Bearer ya29.secretToken456';
+
+      jest
+        .spyOn(adapter, 'evaluate')
+        .mockRejectedValueOnce(new DecisionEngineUnavailableException(fakeSecretMsg));
+
+      await request(app.getHttpServer())
+        .post('/decisions')
+        .set('x-request-id', customReqId)
+        .send({ payment_id: 'pay_000001_a1' })
+        .expect(503);
+
+      const errorCallsForReq = errorSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((str) => str.includes(customReqId));
+
+      expect(errorCallsForReq.length).toBeGreaterThanOrEqual(1);
+      const combinedLogs = errorCallsForReq.join(' ');
+
+      expect(combinedLogs).not.toContain('SuperSecret123');
+      expect(combinedLogs).not.toContain('ya29.secretToken456');
+      expect(combinedLogs).not.toContain('C:\\app\\secrets\\key.pem');
+      expect(combinedLogs).not.toContain('secretAcc');
+    });
   });
 });
+
