@@ -11,22 +11,224 @@ PostgreSQL implementation of DecisionRepository using psycopg v3 async APIs.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import datetime
+import logging
 import os
+import re
+import time
 from typing import Any, AsyncIterator, Optional, Union
 import uuid
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from psycopg_pool import AsyncConnectionPool
 
+logger = logging.getLogger("decision_engine.persistence.postgres")
+
+
+# ── Configuration & Sanitization Helpers ─────────────────────────────────────
+
+def sanitize_database_url(url: str) -> str:
+    """Mask credentials in database URL to prevent secret leakage in logs/errors."""
+    if not url:
+        return ""
+    return re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", url)
+
+
+def validate_database_url(url: str | None) -> str:
+    """
+    Validate that database URL is present, non-empty, and uses a valid postgres scheme.
+    Raises ValueError if invalid.
+    """
+    if not url or not isinstance(url, str) or not url.strip():
+        raise ValueError("DATABASE_URL is required but was not provided.")
+    clean_url = url.strip()
+    if not (clean_url.startswith("postgresql://") or clean_url.startswith("postgres://")):
+        safe_url = sanitize_database_url(clean_url)
+        raise ValueError(
+            f"Invalid DATABASE_URL scheme in '{safe_url}'. Must start with 'postgresql://' or 'postgres://'."
+        )
+    return clean_url
+
+
+def get_pool_config(
+    database_url: Optional[str] = None,
+    min_size: Optional[int] = None,
+    max_size: Optional[int] = None,
+    timeout_ms: Optional[int] = None,
+) -> dict[str, Any]:
+    """
+    Resolve and validate PostgreSQL connection pool configuration from arguments or environment.
+
+    Variables:
+        DATABASE_URL           PostgreSQL connection URI (required)
+        DB_POOL_MIN            default 2 (>= 1, <= DB_POOL_MAX)
+        DB_POOL_MAX            default 12 (>= DB_POOL_MIN)
+        DB_CONNECT_TIMEOUT_MS  default 3000 (> 0)
+    """
+    raw_url = database_url if database_url is not None else (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL"))
+    valid_url = validate_database_url(raw_url)
+
+    # DB_POOL_MIN: integer >= 1
+    raw_min = min_size if min_size is not None else os.getenv("DB_POOL_MIN", "2")
+    try:
+        min_val = int(raw_min)
+    except (TypeError, ValueError):
+        raise ValueError(f"DB_POOL_MIN must be a valid integer, got {raw_min!r}")
+    if min_val < 1:
+        raise ValueError(f"DB_POOL_MIN must be at least 1, got {min_val}")
+
+    # DB_POOL_MAX: integer >= DB_POOL_MIN
+    # DB_POOL_MAX=12 is intentional:
+    # app.state.llm_semaphore limits LLM-bound work to 5 concurrent
+    # requests. Cache-hit requests still require database access but
+    # do not consume an LLM semaphore slot. A pool of 12 provides
+    # headroom for those requests and avoids unnecessary connection
+    # starvation without being arbitrary.
+    raw_max = max_size if max_size is not None else os.getenv("DB_POOL_MAX", "12")
+    try:
+        max_val = int(raw_max)
+    except (TypeError, ValueError):
+        raise ValueError(f"DB_POOL_MAX must be a valid integer, got {raw_max!r}")
+    if max_val < min_val:
+        raise ValueError(f"DB_POOL_MAX ({max_val}) cannot be less than DB_POOL_MIN ({min_val})")
+
+    # DB_CONNECT_TIMEOUT_MS: positive integer
+    raw_timeout = timeout_ms if timeout_ms is not None else os.getenv("DB_CONNECT_TIMEOUT_MS", "3000")
+    try:
+        timeout_val = int(raw_timeout)
+    except (TypeError, ValueError):
+        raise ValueError(f"DB_CONNECT_TIMEOUT_MS must be a valid integer, got {raw_timeout!r}")
+    if timeout_val <= 0:
+        raise ValueError(f"DB_CONNECT_TIMEOUT_MS must be a positive integer, got {timeout_val}")
+
+    return {
+        "database_url": valid_url,
+        "min_size": min_val,
+        "max_size": max_val,
+        "timeout_ms": timeout_val,
+    }
+
+
+# ── Pool Creation & Lifecycle ────────────────────────────────────────────────
+
+async def create_postgres_pool(
+    database_url: Optional[str] = None,
+    min_size: Optional[int] = None,
+    max_size: Optional[int] = None,
+    timeout_ms: Optional[int] = None,
+) -> AsyncConnectionPool:
+    """
+    Create, open, and verify an asynchronous psycopg PostgreSQL connection pool.
+
+    The startup sequence MUST be:
+        validate config
+            ↓
+        create AsyncConnectionPool(open=False)
+            ↓
+        open pool
+            ↓
+        borrow one connection
+            ↓
+        SELECT 1
+            ↓
+        pool ready
+
+    Fails fast if config is invalid, opening times out, or verification fails.
+    """
+    try:
+        config = get_pool_config(
+            database_url=database_url,
+            min_size=min_size,
+            max_size=max_size,
+            timeout_ms=timeout_ms,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"PostgreSQL pool initialization failed: invalid configuration: {exc}. Service refusing to start."
+        ) from exc
+
+    url = config["database_url"]
+    min_conn = config["min_size"]
+    max_conn = config["max_size"]
+    total_timeout_sec = config["timeout_ms"] / 1000.0
+
+    deadline = time.monotonic() + total_timeout_sec
+    safe_url = sanitize_database_url(url)
+
+    pool: Optional[AsyncConnectionPool] = None
+    try:
+        # Create pool with open=False
+        pool = AsyncConnectionPool(
+            conninfo=url,
+            min_size=min_conn,
+            max_size=max_conn,
+            open=False,
+            timeout=total_timeout_sec,
+            connection_class=psycopg.AsyncConnection,
+        )
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Startup budget exceeded before opening pool at {safe_url}")
+
+        # Explicitly open pool bounded by monotonic deadline
+        await asyncio.wait_for(pool.open(wait=True, timeout=remaining), timeout=remaining)
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Startup budget exceeded while awaiting pool readiness at {safe_url}")
+
+        # Borrow one connection and run SELECT 1
+        async with pool.connection(timeout=remaining) as conn:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Startup budget exceeded before ping verification at {safe_url}")
+            async with conn.cursor() as cur:
+                await asyncio.wait_for(cur.execute("SELECT 1;"), timeout=remaining)
+                row = await cur.fetchone()
+                if not row or row[0] != 1:
+                    raise RuntimeError(f"Verification ping SELECT 1 returned unexpected result at {safe_url}")
+
+        return pool
+
+    except Exception as exc:
+        if pool is not None:
+            try:
+                await pool.close(timeout=1.0)
+            except Exception:
+                pass
+        safe_msg = f"{type(exc).__name__}: {exc}"
+        raise RuntimeError(
+            f"PostgreSQL pool initialization failed: {safe_msg}. Service refusing to start."
+        ) from exc
+
+
+async def close_postgres_pool(pool: Optional[AsyncConnectionPool]) -> None:
+    """
+    Cleanly close an active AsyncConnectionPool at shutdown.
+    Tolerates uninitialized or already-closed pools safely.
+    """
+    if pool is None:
+        return
+    try:
+        if not getattr(pool, "closed", False):
+            await pool.close(timeout=3.0)
+    except Exception as exc:
+        logger.warning(f"Error during PostgreSQL connection pool shutdown: {exc}")
+
+
+# ── Decision Repository ──────────────────────────────────────────────────────
 
 class PostgresDecisionRepository:
     """
     PostgreSQL concrete implementation of DecisionRepository.
 
     Backed strictly by psycopg v3 async APIs (no asyncpg).
+    Supports either an AsyncConnectionPool or standalone AsyncConnection / URL.
     Implements:
     - get_current_decision(payment_id) -> dict | None
     - save_current_decision(**kwargs) -> UPSERT into decision_audit
@@ -36,28 +238,40 @@ class PostgresDecisionRepository:
 
     def __init__(
         self,
-        connection_or_url: Optional[Union[psycopg.AsyncConnection[Any], str]] = None,
+        connection_or_pool_or_url: Optional[Union[AsyncConnectionPool, psycopg.AsyncConnection[Any], str]] = None,
         *,
+        pool: Optional[AsyncConnectionPool] = None,
         database_url: Optional[str] = None,
     ) -> None:
         """
-        Initialize repository with an active psycopg AsyncConnection, connection pool,
+        Initialize repository with an AsyncConnectionPool, active psycopg AsyncConnection,
         or database URL string.
         """
-        if isinstance(connection_or_url, str):
-            self._connection: Optional[psycopg.AsyncConnection[Any]] = None
-            self._database_url: Optional[str] = connection_or_url
-        elif connection_or_url is not None:
-            self._connection = connection_or_url
-            self._database_url = None
+        self._pool: Optional[AsyncConnectionPool] = None
+        self._connection: Optional[psycopg.AsyncConnection[Any]] = None
+        self._database_url: Optional[str] = None
+
+        if pool is not None:
+            self._pool = pool
+        elif isinstance(connection_or_pool_or_url, AsyncConnectionPool):
+            self._pool = connection_or_pool_or_url
+        elif isinstance(connection_or_pool_or_url, str):
+            self._database_url = connection_or_pool_or_url
+        elif connection_or_pool_or_url is not None:
+            self._connection = connection_or_pool_or_url
         else:
-            self._connection = None
             self._database_url = database_url or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
 
     @asynccontextmanager
     async def _get_cursor(self) -> AsyncIterator[psycopg.AsyncCursor[Any]]:
         """Yield an async cursor configured with dict_row factory."""
-        if self._connection is not None:
+        if self._pool is not None:
+            async with self._pool.connection() as conn:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    yield cur
+                if not conn.autocommit:
+                    await conn.commit()
+        elif self._connection is not None:
             async with self._connection.cursor(row_factory=dict_row) as cur:
                 yield cur
             if not getattr(self._connection, "autocommit", False):
@@ -72,7 +286,7 @@ class PostgresDecisionRepository:
                     await conn.commit()
         else:
             raise ValueError(
-                "Neither an active AsyncConnection nor a valid database_url is available."
+                "Neither an active AsyncConnectionPool, AsyncConnection, nor valid database_url is available."
             )
 
     async def get_current_decision(self, payment_id: str) -> dict[str, Any] | None:

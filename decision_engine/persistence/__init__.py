@@ -12,7 +12,14 @@ from typing import Any, Optional
 
 from decision_engine.persistence.repository import DecisionRepository
 from decision_engine.persistence.in_memory import InMemoryDecisionRepository
-from decision_engine.persistence.postgres import PostgresDecisionRepository
+from decision_engine.persistence.postgres import (
+    PostgresDecisionRepository,
+    create_postgres_pool,
+    close_postgres_pool,
+    get_pool_config,
+    sanitize_database_url,
+    validate_database_url,
+)
 
 
 def run_migrations(
@@ -30,4 +37,9 @@ __all__ = [
     "InMemoryDecisionRepository",
     "PostgresDecisionRepository",
     "run_migrations",
+    "create_postgres_pool",
+    "close_postgres_pool",
+    "get_pool_config",
+    "sanitize_database_url",
+    "validate_database_url",
 ]
