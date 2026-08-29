@@ -96,11 +96,14 @@ describe('DecisionService', () => {
       expect(result.request_id).toBe(capturedReqId);
     });
 
-    it('should map Python result 1:1 into stable DecisionResponseDto', async () => {
+    it('should map Python result 1:1 into stable DecisionResponseDto and delegate exactly once to adapter', async () => {
+      const evaluateSpy = jest.spyOn(adapter, 'evaluate');
+
       const result = await service.createDecision({
         payment_id: 'pay_000001_a1',
       });
 
+      expect(evaluateSpy).toHaveBeenCalledTimes(1);
       expect(result).toEqual({
         payment_id: 'pay_000001_a1',
         model_decision: 'RETRY_NUDGE',

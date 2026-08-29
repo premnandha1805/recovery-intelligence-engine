@@ -50,7 +50,7 @@ function sanitizeErrorMessage(msg: string): string {
   clean = clean.replace(/(?:api[_-]?key|password|secret|token)\s*[:=]\s*['"]?[a-zA-Z0-9_\-\.]+['"]?/gi, '[REDACTED]');
   clean = clean.replace(/\b(bearer\s+)[a-zA-Z0-9_\-\.]+/gi, '$1[REDACTED]');
   clean = clean.replace(/\bAIza[0-9A-Za-z-_]{35}\b/g, '[REDACTED]');
-  clean = clean.replace(/\bsk-[a-zA-Z0-9]{20,}\b/g, '[REDACTED]');
+  clean = clean.replace(/\bsk-[a-zA-Z0-9_\-]{16,}\b/g, '[REDACTED]');
 
   // Redact Windows and Unix filesystem paths
   clean = clean.replace(/[a-zA-Z]:\\[^:\s"'<>|?*]+/g, '[REDACTED_PATH]');
