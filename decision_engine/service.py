@@ -21,6 +21,9 @@ explicitly out of scope for Day 7. [FIX-4]
 
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
 from contextlib import asynccontextmanager
 import json
@@ -40,9 +43,13 @@ from decision_engine.state import RecoveryState
 from decision_engine.graph import create_recovery_graph
 from decision_engine.audit import (
     CREATE_TABLE_SQL,
+    CREATE_EVENTS_TABLE_SQL,
+    CREATE_EVENTS_INDEX_SQL,
     DEFAULT_AUDIT_DB_PATH,
     async_save_decision_audit,
+    compute_state_fingerprint,
 )
+from decision_engine.context_node import get_payment_state, _get_dataset
 from ml.decision import CausalUpliftPolicy
 from models.schemas import Action
 from decision_engine.structured_logger import emit_log
@@ -148,13 +155,25 @@ async def lifespan(app_instance: FastAPI):
     await db.execute("PRAGMA synchronous=NORMAL;")
     await db.execute("PRAGMA busy_timeout=5000;")
     await db.execute(CREATE_TABLE_SQL)
-    # Ensure additive migration for request_id column if table pre-existed
+    # Ensure additive migration for request_id and state_fingerprint columns if table pre-existed
     async with db.execute("PRAGMA table_info(decision_audit)") as cur:
         cols = [c[1] for c in await cur.fetchall()]
         if "request_id" not in cols:
             await db.execute("ALTER TABLE decision_audit ADD COLUMN request_id TEXT;")
+        if "state_fingerprint" not in cols:
+            await db.execute("ALTER TABLE decision_audit ADD COLUMN state_fingerprint TEXT;")
+    await db.execute(CREATE_EVENTS_TABLE_SQL)
+    await db.execute(CREATE_EVENTS_INDEX_SQL)
     await db.commit()
     app_instance.state.db = db
+
+    # Warm canonical dataset in-memory cache once at startup [warm-process design]
+    try:
+        logger.info("Warming canonical dataset cache...")
+        app_instance.state.dataset = _get_dataset()
+    except Exception as exc:
+        logger.warning(f"Could not warm dataset cache: {exc}")
+        app_instance.state.dataset = None
 
     # 3. Create app.state.llm_semaphore = asyncio.Semaphore(5) [FIX-2]
     app_instance.state.llm_semaphore = asyncio.Semaphore(5)
@@ -247,7 +266,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
     Evaluate recovery decision with concurrency-safe idempotency and deadline-aware LLM execution.
     """
     request_start = time.monotonic()
-    llm_deadline = request_start + 5.0
+    llm_deadline = request_start + 6.0
 
     # 1. Validate payment_id
     if not req.payment_id or not isinstance(req.payment_id, str) or not req.payment_id.strip():
@@ -308,12 +327,26 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             wait_ms=lock_wait_ms,
         )
 
+        # FIX 2: Obtain CURRENT payment/customer state before cache lookup
+        dataset = getattr(app.state, "dataset", None)
+        current_state = get_payment_state(payment_id, dataset=dataset)
+        current_fingerprint = None
+        if current_state is not None:
+            current_fingerprint = compute_state_fingerprint(
+                payment_id=current_state["payment_id"],
+                status=current_state["status"],
+                attempt_number=current_state["attempt_number"],
+                consecutive_failures=current_state["consecutive_failures"],
+                retry_count=current_state["retry_count"],
+                interventions_7d=current_state["interventions_7d"],
+            )
+
         # 3. Inside the lock:
-        # a. Check audit.db for existing decision if force_recompute is False
-        if not req.force_recompute:
+        # a. Check audit.db for existing decision if force_recompute is False and state fingerprint matches
+        if not req.force_recompute and current_fingerprint is not None:
             async with app.state.db.execute(
-                "SELECT * FROM decision_audit WHERE payment_id = ?",
-                (payment_id,),
+                "SELECT * FROM decision_audit WHERE payment_id = ? AND state_fingerprint = ?",
+                (payment_id, current_fingerprint),
             ) as cursor:
                 cursor.row_factory = aiosqlite.Row
                 row = await cursor.fetchone()
@@ -350,7 +383,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                     "confidence": float(row["llm_confidence"] or 0.0),
                     "risk_level": str(row["llm_risk_level"] or "none"),
                     "reasoning": str(row["llm_reasoning"] or ""),
-                    "decision_source": str(row["decision_source"] or "cache"),
+                    "decision_source": "cache",
                     "request_id": request_id,
                 }
                 duration_ms = round((time.monotonic() - request_start) * 1000, 2)
@@ -380,6 +413,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
         initial_state: RecoveryState = {
             "payment_id": payment_id,
             "audit_trail": [],
+            "state_fingerprint": current_fingerprint,
         }
 
         # Runtime context passed via standard RunnableConfig configurable dict (Issue 1 & 2)
@@ -389,6 +423,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 "llm_semaphore": app.state.llm_semaphore,
                 "request_id": request_id,
                 "db": app.state.db,
+                "dataset": getattr(app.state, "dataset", None),
             }
         }
 

@@ -59,3 +59,4 @@ class RecoveryState(TypedDict, total=False):
     final_action: str
     error: Optional[str]
     audit_trail: Annotated[list[dict[str, Any]], operator.add]
+    state_fingerprint: Optional[str]

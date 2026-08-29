@@ -38,7 +38,7 @@ from httpx import ASGITransport, AsyncClient
 import pandas as pd
 import pytest
 
-from decision_engine.audit import CREATE_TABLE_SQL
+from decision_engine.audit import CREATE_TABLE_SQL, CREATE_EVENTS_TABLE_SQL, CREATE_EVENTS_INDEX_SQL
 from decision_engine.reasoning_node import LLMDecision
 from decision_engine.graph import create_recovery_graph
 from decision_engine.service import (
@@ -100,6 +100,8 @@ async def init_test_app(tmp_path: pathlib.Path):
     await db.execute("PRAGMA synchronous=NORMAL;")
     await db.execute("PRAGMA busy_timeout=5000;")
     await db.execute(CREATE_TABLE_SQL)
+    await db.execute(CREATE_EVENTS_TABLE_SQL)
+    await db.execute(CREATE_EVENTS_INDEX_SQL)
     await db.commit()
 
     mock_policy = make_mock_policy()

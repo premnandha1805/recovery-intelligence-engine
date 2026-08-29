@@ -128,8 +128,10 @@ def create_recovery_graph(
     if not use_async:
         # Day 6 synchronous execution path
         def run_context(state: RecoveryState, config: RunnableConfig = None) -> dict[str, Any]:
-            res = context_node(state, dataset=dataset)
-            req_id = (config.get("configurable", {}) if config else {}).get("request_id")
+            cfg = config.get("configurable", {}) if config else {}
+            ds = cfg.get("dataset", dataset)
+            res = context_node(state, dataset=ds)
+            req_id = cfg.get("request_id")
             if req_id and "audit_trail" in res:
                 for ev in res["audit_trail"]:
                     ev["request_id"] = req_id
@@ -189,8 +191,10 @@ def create_recovery_graph(
     else:
         # Day 7 asynchronous execution path with RunnableConfig runtime context
         async def run_context(state: RecoveryState, config: RunnableConfig) -> dict[str, Any]:
-            res = context_node(state, dataset=dataset)
-            req_id = (config.get("configurable", {}) if config else {}).get("request_id")
+            cfg = config.get("configurable", {}) if config else {}
+            ds = cfg.get("dataset", dataset)
+            res = context_node(state, dataset=ds)
+            req_id = cfg.get("request_id")
             if req_id and "audit_trail" in res:
                 for ev in res["audit_trail"]:
                     ev["request_id"] = req_id
