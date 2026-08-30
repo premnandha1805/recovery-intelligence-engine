@@ -6,7 +6,9 @@ PostgreSQL implementation of DecisionRepository using psycopg v3 async APIs.
 - Parameterized SQL only (zero raw string interpolation)
 - Uses psycopg.types.json.Jsonb for native JSONB adaptation
 - Preserves native DOUBLE PRECISION and TIMESTAMPTZ types
-- Independent single-operation commits (transaction orchestration is Day 8D)
+- Independent single-operation commits for existing interface methods
+- Day 8D: save_decision_with_event() performs both writes atomically
+  inside ONE psycopg v3 `async with conn.transaction():` block.
 """
 
 from __future__ import annotations
@@ -289,6 +291,26 @@ class PostgresDecisionRepository:
                 "Neither an active AsyncConnectionPool, AsyncConnection, nor valid database_url is available."
             )
 
+    @asynccontextmanager
+    async def _get_connection(self) -> AsyncIterator[psycopg.AsyncConnection[Any]]:
+        """
+        Yield a raw async psycopg connection (without auto-cursor).
+        Used by atomic operations that manage their own transaction boundary
+        via `async with conn.transaction()`.
+        """
+        if self._pool is not None:
+            async with self._pool.connection() as conn:
+                yield conn
+        elif self._connection is not None:
+            yield self._connection
+        elif self._database_url is not None:
+            async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                yield conn
+        else:
+            raise ValueError(
+                "Neither an active AsyncConnectionPool, AsyncConnection, nor valid database_url is available."
+            )
+
     async def get_current_decision(self, payment_id: str) -> dict[str, Any] | None:
         """
         Retrieve the latest decision audit record for payment_id.
@@ -499,3 +521,137 @@ class PostgresDecisionRepository:
             await cur.execute(query, {"payment_id": payment_id})
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
+
+    # ── Day 8D: Atomic Combined Operation ─────────────────────────────────────
+
+    async def save_decision_with_event(self, **kwargs: Any) -> None:
+        """
+        Atomically persist a current-decision record AND an audit event record
+        within a SINGLE psycopg v3 transaction.
+
+        Both writes (INSERT/UPSERT into decision_audit, INSERT into
+        decision_audit_events) are executed inside one
+        `async with conn.transaction():` block. If the second write fails,
+        psycopg rolls back the entire transaction — including the first write.
+
+        Parameters (kwargs)
+        -------------------
+        payment_id         : str   (required)
+        decision_id        : str   (auto-generated if absent)
+        event_decision_id  : str   (separate PK for events row; auto-generated)
+        All other fields mirror save_current_decision() + append_decision_event().
+
+        Raises
+        ------
+        ValueError  if payment_id is missing.
+        Any psycopg error propagates unmodified so callers can inspect it;
+        the transaction is already rolled back by psycopg's context manager.
+        """
+        payment_id = kwargs.get("payment_id")
+        if not payment_id:
+            raise ValueError("payment_id is required for save_decision_with_event")
+
+        decision_id = kwargs.get("decision_id") or f"dec_{payment_id}"
+        # event_decision_id is the PK for the decision_audit_events row.
+        # Callers may supply it explicitly (useful in failure-injection tests).
+        event_decision_id = kwargs.get("event_decision_id") or str(uuid.uuid4())
+        evaluated_at = kwargs.get("evaluated_at") or datetime.datetime.now(datetime.timezone.utc)
+
+        raw_probs = kwargs.get("raw_arm_probabilities")
+        raw_net = kwargs.get("raw_arm_net_values")
+        probs_val = Jsonb(raw_probs) if raw_probs is not None else None
+        net_val = Jsonb(raw_net) if raw_net is not None else None
+
+        decision_params = {
+            "payment_id": payment_id,
+            "decision_id": decision_id,
+            "request_id": kwargs.get("request_id"),
+            "raw_arm_probabilities": probs_val,
+            "raw_arm_net_values": net_val,
+            "llm_proposed_decision": kwargs.get("llm_proposed_decision"),
+            "llm_confidence": kwargs.get("llm_confidence"),
+            "llm_reasoning": kwargs.get("llm_reasoning"),
+            "llm_risk_level": kwargs.get("llm_risk_level"),
+            "expected_incremental_value": kwargs.get("expected_incremental_value"),
+            "guardrail_verdict": kwargs.get("guardrail_verdict"),
+            "guardrail_reason": kwargs.get("guardrail_reason"),
+            "final_action": kwargs.get("final_action", "WAIT"),
+            "decision_source": kwargs.get("decision_source", "unknown"),
+            "error": kwargs.get("error"),
+            "evaluated_at": evaluated_at,
+            "state_fingerprint": kwargs.get("state_fingerprint"),
+        }
+
+        event_params = {
+            "decision_id": event_decision_id,
+            "payment_id": payment_id,
+            "request_id": kwargs.get("request_id"),
+            "evaluated_at": evaluated_at,
+            "decision_source": kwargs.get("decision_source"),
+            "final_action": kwargs.get("final_action", "WAIT"),
+            "model_decision": kwargs.get("model_decision"),
+            "llm_proposed_decision": kwargs.get("llm_proposed_decision"),
+            "guardrail_overridden": kwargs.get("guardrail_overridden"),
+            "guardrail_reason": kwargs.get("guardrail_reason"),
+            "state_fingerprint": kwargs.get("state_fingerprint"),
+        }
+
+        upsert_decision_sql = """
+        INSERT INTO decision_audit (
+            payment_id, decision_id, request_id,
+            raw_arm_probabilities, raw_arm_net_values,
+            llm_proposed_decision, llm_confidence, llm_reasoning, llm_risk_level,
+            expected_incremental_value, guardrail_verdict, guardrail_reason,
+            final_action, decision_source, error, evaluated_at, state_fingerprint
+        ) VALUES (
+            %(payment_id)s, %(decision_id)s, %(request_id)s,
+            %(raw_arm_probabilities)s, %(raw_arm_net_values)s,
+            %(llm_proposed_decision)s, %(llm_confidence)s, %(llm_reasoning)s,
+            %(llm_risk_level)s, %(expected_incremental_value)s,
+            %(guardrail_verdict)s, %(guardrail_reason)s,
+            %(final_action)s, %(decision_source)s, %(error)s,
+            %(evaluated_at)s, %(state_fingerprint)s
+        )
+        ON CONFLICT (payment_id) DO UPDATE SET
+            decision_id = EXCLUDED.decision_id,
+            request_id = EXCLUDED.request_id,
+            raw_arm_probabilities = EXCLUDED.raw_arm_probabilities,
+            raw_arm_net_values = EXCLUDED.raw_arm_net_values,
+            llm_proposed_decision = EXCLUDED.llm_proposed_decision,
+            llm_confidence = EXCLUDED.llm_confidence,
+            llm_reasoning = EXCLUDED.llm_reasoning,
+            llm_risk_level = EXCLUDED.llm_risk_level,
+            expected_incremental_value = EXCLUDED.expected_incremental_value,
+            guardrail_verdict = EXCLUDED.guardrail_verdict,
+            guardrail_reason = EXCLUDED.guardrail_reason,
+            final_action = EXCLUDED.final_action,
+            decision_source = EXCLUDED.decision_source,
+            error = EXCLUDED.error,
+            evaluated_at = EXCLUDED.evaluated_at,
+            state_fingerprint = EXCLUDED.state_fingerprint;
+        """
+
+        insert_event_sql = """
+        INSERT INTO decision_audit_events (
+            decision_id, payment_id, request_id, evaluated_at,
+            decision_source, final_action, model_decision, llm_proposed_decision,
+            guardrail_overridden, guardrail_reason, state_fingerprint
+        ) VALUES (
+            %(decision_id)s, %(payment_id)s, %(request_id)s, %(evaluated_at)s,
+            %(decision_source)s, %(final_action)s, %(model_decision)s,
+            %(llm_proposed_decision)s, %(guardrail_overridden)s,
+            %(guardrail_reason)s, %(state_fingerprint)s
+        );
+        """
+
+        async with self._get_connection() as conn:
+            async with conn.transaction():
+                # Write 1 of 2: upsert current decision into decision_audit
+                async with conn.cursor() as cur:
+                    await cur.execute(upsert_decision_sql, decision_params)
+
+                # Write 2 of 2: append audit event into decision_audit_events
+                # If this raises, psycopg rolls back the entire transaction,
+                # including the decision_audit row written above.
+                async with conn.cursor() as cur:
+                    await cur.execute(insert_event_sql, event_params)

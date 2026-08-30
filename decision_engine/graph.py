@@ -232,9 +232,13 @@ def create_recovery_graph(
 
         async def run_execution(state: RecoveryState, config: RunnableConfig) -> dict[str, Any]:
             cfg = config.get("configurable", {}) if config else {}
+            repository = cfg.get("repository")
             db = cfg.get("db")
             req_id = cfg.get("request_id")
-            if db is not None:
+            if repository is not None:
+                # Persistence is handled by service layer using repository.save_decision_with_event
+                pass
+            elif db is not None:
                 await async_save_decision_audit(state, db, request_id=req_id)
             else:
                 await asyncio.to_thread(execution_node, state, db_path=db_path, request_id=req_id)

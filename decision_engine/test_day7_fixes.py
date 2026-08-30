@@ -15,12 +15,17 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import os
 import pathlib
 import sqlite3
+import sys
 import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import aiosqlite
 from httpx import ASGITransport, AsyncClient
@@ -651,3 +656,345 @@ async def test_mandatory_dataset_warm_loading_no_repeated_csv_parsing(tmp_path: 
                 )
     finally:
         await db.close()
+
+
+# ── DAY 8E: PostgreSQL State-Fingerprint Cache Integration Tests ──────────────
+
+async def init_isolated_postgres_service(mock_llm: Any = None):
+    """
+    Initialize a test FastAPI service wired directly to Docker PostgreSQL.
+    Consumes zero Azure tokens via mock_llm.
+    """
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    if not test_db_url:
+        pytest.skip("TEST_DATABASE_URL is not set.")
+
+    import psycopg
+    from decision_engine.persistence.postgres import PostgresDecisionRepository, create_postgres_pool
+    from decision_engine.persistence.migrate import run_migrations
+
+    run_migrations(database_url=test_db_url)
+    pool = await create_postgres_pool(test_db_url)
+    repo = PostgresDecisionRepository(pool=pool)
+
+    policy = make_mock_policy()
+    llm = mock_llm or make_mock_llm(decision="RETRY")
+    graph = create_recovery_graph(policy=policy, llm=llm, use_async=True)
+
+    app.state.policy = policy
+    app.state.graph = graph
+    app.state.db_pool = pool
+    app.state.repository = repo
+    app.state.db = None
+    app.state.llm_semaphore = asyncio.Semaphore(5)
+    app.state.payment_locks = {}
+    app.state.locks_mutex = asyncio.Lock()
+    app.state.dataset = None
+
+    return app, repo, pool, llm
+
+
+def _cleanup_postgres_payment(payment_id: str, db_url: str):
+    """Clean up any leftover rows for payment_id in Docker PostgreSQL."""
+    import psycopg
+    with psycopg.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM decision_audit WHERE payment_id = %s;", (payment_id,))
+            cur.execute("DELETE FROM decision_audit_events WHERE payment_id = %s;", (payment_id,))
+        conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_postgres_stale_cache_invalidation_on_success_transition():
+    """
+    Day 8E (Section 8) — Stale Cache Invalidation with Real Docker PostgreSQL:
+    1. Start from clean database state for test payment.
+    2. Set initial dataset state: status=FAILED, attempt_number=1, consecutive_failures=0, retry_count=0, interventions_7d=0.
+    3. Evaluate with force_recompute=False -> fresh evaluation, decision_source!='cache', final_action=RETRY.
+    4. Confirm state_fingerprint is persisted.
+    5. Mutate ONLY dataset status to SUCCESS.
+    6. Re-evaluate with force_recompute=False.
+    7. REQUIRED: cache MISS, new fingerprint != initial fingerprint, stale RETRY not returned, final_action=WAIT.
+    8. Confirm decision_audit contains exactly one row with new fingerprint.
+    9. Confirm decision_audit_events contains two events.
+    10. Confirm mocked LLM invocation count increased exactly once (total 2).
+    """
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    if not test_db_url:
+        pytest.skip("TEST_DATABASE_URL is not set.")
+
+    payment_id = "pay_day8e_stale_001"
+    _cleanup_postgres_payment(payment_id, test_db_url)
+
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_llm.with_structured_output.return_value = mock_structured
+
+    async def fake_ainvoke(prompt_str, *args, **kwargs):
+        if "['WAIT']" in str(prompt_str):
+            return LLMDecision(
+                decision="WAIT",
+                confidence=0.95,
+                reasoning="Payment in terminal/success status; waiting.",
+                risk_level="low",
+            )
+        return LLMDecision(
+            decision="RETRY",
+            confidence=0.90,
+            reasoning="Selected RETRY based on positive uplift.",
+            risk_level="low",
+        )
+
+    mock_structured.ainvoke = AsyncMock(side_effect=fake_ainvoke)
+    mock_structured.invoke = MagicMock(side_effect=fake_ainvoke)
+    structured_mock = mock_structured
+
+    app_instance, repo, pool, _ = await init_isolated_postgres_service(mock_llm=mock_llm)
+
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            test_df = _get_dataset().copy()
+            # Set initial failed state for test payment
+            row_dict = test_df.iloc[0].to_dict()
+            row_dict.update({
+                "payment_id": payment_id,
+                "status": "FAILED",
+                "attempt_number": 1,
+                "consecutive_failed_cycles": 0,
+                "retry_count": 0,
+                "interventions_last_7_days": 0,
+            })
+            test_df = test_df[test_df["payment_id"] != payment_id]
+            test_df = pd.concat([test_df, pd.DataFrame([row_dict])], ignore_index=True)
+            app_instance.state.dataset = test_df
+
+            # Step 3: Run /evaluate with force_recompute=False
+            req_id_1 = "req-day8e-fresh-001"
+            resp1 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": req_id_1},
+                json={"payment_id": payment_id, "force_recompute": False},
+            )
+            assert resp1.status_code == 200
+            data1 = resp1.json()
+
+            # Step 5: Verify fresh evaluation occurred
+            assert data1["decision_source"] != "cache"
+            assert data1["final_action"] == "RETRY"
+            assert structured_mock.ainvoke.call_count == 1
+
+            # Step 6: Record initial fingerprint and row counts from PostgreSQL
+            rec1 = await repo.get_current_decision(payment_id)
+            assert rec1 is not None, "PostgreSQL decision_audit must contain record"
+            fp1 = rec1["state_fingerprint"]
+            assert fp1 is not None and len(fp1) == 64
+            events1 = await repo.get_events(payment_id)
+            assert len(events1) == 1, "Exactly 1 event in decision_audit_events"
+
+            # Step 7: WITHOUT reloading CSV, mutate ONLY status to SUCCESS
+            test_df.loc[test_df["payment_id"] == payment_id, "status"] = "SUCCESS"
+
+            # Step 8: POST /evaluate again with force_recompute=False
+            req_id_2 = "req-day8e-stale-002"
+            resp2 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": req_id_2},
+                json={"payment_id": payment_id, "force_recompute": False},
+            )
+            assert resp2.status_code == 200
+            data2 = resp2.json()
+
+            # Step 9: Verify cache MISS, new fingerprint != old, final_action=WAIT
+            assert data2["decision_source"] != "cache", "Second request must NOT be a cache hit"
+            assert data2["final_action"] != "RETRY", "Stale cached RETRY must NOT be returned"
+            assert data2["final_action"] == "WAIT", "SUCCESS state must cause WAIT via guardrail transition rule"
+
+            # Verify PostgreSQL state
+            rec2 = await repo.get_current_decision(payment_id)
+            assert rec2 is not None
+            fp2 = rec2["state_fingerprint"]
+            assert fp2 is not None and len(fp2) == 64
+            assert fp1 != fp2, "New fingerprint must differ from the initial fingerprint"
+            assert rec2["final_action"] == "WAIT"
+
+            events2 = await repo.get_events(payment_id)
+            assert len(events2) == 2, "Event ledger must contain exactly 2 events (one per evaluation)"
+
+            # Step 11: Verify mocked LLM invocation count increased exactly once
+            assert structured_mock.ainvoke.call_count == 2, "LLM must be invoked exactly twice (one per fresh eval)"
+    finally:
+        from decision_engine.persistence.postgres import close_postgres_pool
+        await close_postgres_pool(pool)
+        _cleanup_postgres_payment(payment_id, test_db_url)
+
+
+@pytest.mark.asyncio
+async def test_postgres_fingerprint_cache_hit_zero_events():
+    """
+    Day 8E (Section 9) — Cache-Hit Integration Test with Real Docker PostgreSQL:
+    1. Evaluate payment once -> fresh evaluation.
+    2. Repeat same payment without changing fingerprint input, force_recompute=False.
+    3. Assert:
+       - decision_source == 'cache'
+       - no additional LLM invocation (call count stays 1)
+       - decision_audit remains 1 row
+       - decision_audit_events count unchanged (zero new events appended)
+       - HTTP request_id in response represents current request
+       - historical request_id in database is NOT overwritten
+    """
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    if not test_db_url:
+        pytest.skip("TEST_DATABASE_URL is not set.")
+
+    payment_id = "pay_day8e_hit_002"
+    _cleanup_postgres_payment(payment_id, test_db_url)
+
+    mock_llm = make_mock_llm(decision="RETRY")
+    structured_mock = mock_llm.with_structured_output.return_value
+
+    app_instance, repo, pool, _ = await init_isolated_postgres_service(mock_llm=mock_llm)
+
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            test_df = _get_dataset().copy()
+            row_dict = test_df.iloc[0].to_dict()
+            row_dict.update({
+                "payment_id": payment_id,
+                "status": "FAILED",
+                "attempt_number": 1,
+                "consecutive_failed_cycles": 0,
+                "retry_count": 0,
+                "interventions_last_7_days": 0,
+            })
+            test_df = test_df[test_df["payment_id"] != payment_id]
+            test_df = pd.concat([test_df, pd.DataFrame([row_dict])], ignore_index=True)
+            app_instance.state.dataset = test_df
+
+            # Request 1: Fresh evaluation
+            req_id_1 = "req-day8e-hit-initial-111"
+            resp1 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": req_id_1},
+                json={"payment_id": payment_id, "force_recompute": False},
+            )
+            assert resp1.status_code == 200
+            assert resp1.json()["decision_source"] != "cache"
+            assert structured_mock.ainvoke.call_count == 1
+
+            rec1 = await repo.get_current_decision(payment_id)
+            assert rec1["request_id"] == req_id_1
+            events1 = await repo.get_events(payment_id)
+            assert len(events1) == 1
+
+            # Request 2: Identical state, force_recompute=False -> Cache HIT
+            req_id_2 = "req-day8e-hit-cached-222"
+            resp2 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": req_id_2},
+                json={"payment_id": payment_id, "force_recompute": False},
+            )
+            assert resp2.status_code == 200
+            data2 = resp2.json()
+
+            # Assertions
+            assert data2["decision_source"] == "cache", "Second request MUST be a cache hit"
+            assert data2["request_id"] == req_id_2, "Response must preserve current HTTP request_id"
+            assert structured_mock.ainvoke.call_count == 1, "Zero additional LLM calls on cache hit"
+
+            # Verify PostgreSQL zero-write on cache hit
+            events2 = await repo.get_events(payment_id)
+            assert len(events2) == 1, "No new decision_audit_events row must be created on cache hit"
+
+            rec2 = await repo.get_current_decision(payment_id)
+            assert rec2["request_id"] == req_id_1, "Historical request_id in database must NOT be overwritten by cache hit"
+    finally:
+        from decision_engine.persistence.postgres import close_postgres_pool
+        await close_postgres_pool(pool)
+        _cleanup_postgres_payment(payment_id, test_db_url)
+
+
+@pytest.mark.asyncio
+async def test_postgres_force_recompute_bypasses_fingerprint_cache():
+    """
+    Day 8E (Section 10) — Force-Recompute Integration Test with Real Docker PostgreSQL:
+    1. Evaluate payment once.
+    2. Repeat with force_recompute=True.
+    3. Assert:
+       - cache lookup is bypassed
+       - fresh evaluation occurs (decision_source != 'cache')
+       - decision_audit remains one current-state row for payment
+       - decision_audit_events increases by one (total 2)
+       - new event decision_id is distinct
+       - latest event and decision_audit row contain the new request_id
+       - state_fingerprint is persisted
+    """
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    if not test_db_url:
+        pytest.skip("TEST_DATABASE_URL is not set.")
+
+    payment_id = "pay_day8e_force_003"
+    _cleanup_postgres_payment(payment_id, test_db_url)
+
+    mock_llm = make_mock_llm(decision="RETRY")
+    structured_mock = mock_llm.with_structured_output.return_value
+
+    app_instance, repo, pool, _ = await init_isolated_postgres_service(mock_llm=mock_llm)
+
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            test_df = _get_dataset().copy()
+            row_dict = test_df.iloc[0].to_dict()
+            row_dict.update({
+                "payment_id": payment_id,
+                "status": "FAILED",
+                "attempt_number": 1,
+                "consecutive_failed_cycles": 0,
+                "retry_count": 0,
+                "interventions_last_7_days": 0,
+            })
+            test_df = test_df[test_df["payment_id"] != payment_id]
+            test_df = pd.concat([test_df, pd.DataFrame([row_dict])], ignore_index=True)
+            app_instance.state.dataset = test_df
+
+            # Request 1: Initial evaluation
+            req_id_1 = "req-force-initial-001"
+            resp1 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": req_id_1},
+                json={"payment_id": payment_id, "force_recompute": False},
+            )
+            assert resp1.status_code == 200
+            assert structured_mock.ainvoke.call_count == 1
+            events1 = await repo.get_events(payment_id)
+            assert len(events1) == 1
+
+            # Request 2: Repeat with force_recompute=True
+            req_id_2 = "req-force-recompute-002"
+            resp2 = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": req_id_2},
+                json={"payment_id": payment_id, "force_recompute": True},
+            )
+            assert resp2.status_code == 200
+            data2 = resp2.json()
+
+            # Assertions
+            assert data2["decision_source"] != "cache", "force_recompute=True must bypass cache"
+            assert structured_mock.ainvoke.call_count == 2, "Fresh evaluation must occur"
+
+            events2 = await repo.get_events(payment_id)
+            assert len(events2) == 2, "decision_audit_events row count must increase by 1"
+            assert events2[0]["decision_id"] != events2[1]["decision_id"], "New event decision_id must be distinct"
+            assert events2[1]["request_id"] == req_id_2, "Latest event must contain new request_id"
+
+            rec2 = await repo.get_current_decision(payment_id)
+            assert rec2 is not None
+            assert rec2["request_id"] == req_id_2, "decision_audit current row must reflect new request_id"
+            assert rec2["state_fingerprint"] is not None
+    finally:
+        from decision_engine.persistence.postgres import close_postgres_pool
+        await close_postgres_pool(pool)
+        _cleanup_postgres_payment(payment_id, test_db_url)

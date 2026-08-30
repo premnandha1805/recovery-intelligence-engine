@@ -26,6 +26,7 @@ load_dotenv()
 
 import asyncio
 from contextlib import asynccontextmanager
+import datetime
 import json
 import logging
 import os
@@ -34,25 +35,24 @@ import time
 from typing import Any, Optional
 import uuid
 
-import aiosqlite
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from decision_engine.persistence.postgres import (
+from decision_engine.persistence import (
+    DecisionRepository,
+    PostgresDecisionRepository,
+    SqliteDecisionRepository,
     create_postgres_pool,
     close_postgres_pool,
 )
+from decision_engine.persistence.sqlite import open_sqlite_repository
 
 from decision_engine.state import RecoveryState
 from decision_engine.graph import create_recovery_graph
 from decision_engine.audit import (
-    CREATE_TABLE_SQL,
-    CREATE_EVENTS_TABLE_SQL,
-    CREATE_EVENTS_INDEX_SQL,
     DEFAULT_AUDIT_DB_PATH,
-    async_save_decision_audit,
     compute_state_fingerprint,
 )
 from decision_engine.context_node import get_payment_state, _get_dataset
@@ -144,14 +144,26 @@ async def get_payment_lock(app_instance: FastAPI, payment_id: str) -> asyncio.Lo
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    # 0. PostgreSQL connection pool lifecycle (Day 8C)
+    # 0. Persistence backend initialization (Day 8E)
     # Default remains 'sqlite' to preserve Day 7 runtime unchanged.
     # When PERSISTENCE_BACKEND=postgres, pool creation is fail-fast.
     persistence_backend = os.getenv("PERSISTENCE_BACKEND", "sqlite").lower()
+    app_instance.state.persistence_backend = persistence_backend
     app_instance.state.db_pool = None
+    app_instance.state.db = None
+    app_instance.state.repository = None
+
     if persistence_backend == "postgres":
         logger.info("Initializing PostgreSQL AsyncConnectionPool (PERSISTENCE_BACKEND=postgres)...")
         app_instance.state.db_pool = await create_postgres_pool()
+        app_instance.state.repository = PostgresDecisionRepository(pool=app_instance.state.db_pool)
+    else:
+        # SQLite persistence backend (Day 7 default)
+        db_path = str(DEFAULT_AUDIT_DB_PATH)
+        logger.info(f"Opening SQLite repository at {db_path}...")
+        db, repo = await open_sqlite_repository(db_path)
+        app_instance.state.db = db
+        app_instance.state.repository = repo
 
     # 1. Initialize CausalUpliftPolicy exactly once
     logger.info("Initializing CausalUpliftPolicy...")
@@ -160,27 +172,6 @@ async def lifespan(app_instance: FastAPI):
     except Exception as exc:
         logger.error(f"Failed to initialize CausalUpliftPolicy: {exc}")
         app_instance.state.policy = None
-
-    # 2. Open ONE aiosqlite write connection to decision_engine/audit.db [FIX-5]
-    db_path = str(DEFAULT_AUDIT_DB_PATH)
-    pathlib.Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Opening aiosqlite write connection to {db_path}...")
-    db = await aiosqlite.connect(db_path)
-    await db.execute("PRAGMA journal_mode=WAL;")
-    await db.execute("PRAGMA synchronous=NORMAL;")
-    await db.execute("PRAGMA busy_timeout=5000;")
-    await db.execute(CREATE_TABLE_SQL)
-    # Ensure additive migration for request_id and state_fingerprint columns if table pre-existed
-    async with db.execute("PRAGMA table_info(decision_audit)") as cur:
-        cols = [c[1] for c in await cur.fetchall()]
-        if "request_id" not in cols:
-            await db.execute("ALTER TABLE decision_audit ADD COLUMN request_id TEXT;")
-        if "state_fingerprint" not in cols:
-            await db.execute("ALTER TABLE decision_audit ADD COLUMN state_fingerprint TEXT;")
-    await db.execute(CREATE_EVENTS_TABLE_SQL)
-    await db.execute(CREATE_EVENTS_INDEX_SQL)
-    await db.commit()
-    app_instance.state.db = db
 
     # Warm canonical dataset in-memory cache once at startup [warm-process design]
     try:
@@ -209,15 +200,17 @@ async def lifespan(app_instance: FastAPI):
 
     yield
 
-    # 6. On shutdown (lifespan exit), close aiosqlite connection cleanly [FIX-8]
-    logger.info("Closing aiosqlite connection...")
+    # 6. On shutdown (lifespan exit), close database connections cleanly
     if hasattr(app_instance.state, "db") and app_instance.state.db is not None:
+        logger.info("Closing SQLite connection...")
         await app_instance.state.db.close()
+        app_instance.state.db = None
 
-    # 7. On shutdown, close PostgreSQL connection pool cleanly if initialized [Day 8C]
     if getattr(app_instance.state, "db_pool", None) is not None:
         logger.info("Closing PostgreSQL connection pool...")
         await close_postgres_pool(app_instance.state.db_pool)
+
+    app_instance.state.repository = None
 
 
 # ── FastAPI App Instance ─────────────────────────────────────────────────────
@@ -362,16 +355,20 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             )
 
         # 3. Inside the lock:
-        # a. Check audit.db for existing decision if force_recompute is False and state fingerprint matches
-        if not req.force_recompute and current_fingerprint is not None:
-            async with app.state.db.execute(
-                "SELECT * FROM decision_audit WHERE payment_id = ? AND state_fingerprint = ?",
-                (payment_id, current_fingerprint),
-            ) as cursor:
-                cursor.row_factory = aiosqlite.Row
-                row = await cursor.fetchone()
+        repository: Optional[DecisionRepository] = getattr(app.state, "repository", None)
+        active_db = getattr(app.state, "db", None)
+        if active_db is not None:
+            if not isinstance(repository, SqliteDecisionRepository) or repository.db is not active_db:
+                repository = SqliteDecisionRepository(active_db)
 
-            if row is not None:
+        # a. Check repository cache if force_recompute is False and state fingerprint matches
+        if not req.force_recompute and current_fingerprint is not None and repository is not None:
+            persisted = await repository.get_current_decision(payment_id)
+            if (
+                persisted is not None
+                and persisted.get("state_fingerprint") is not None
+                and persisted.get("state_fingerprint") == current_fingerprint
+            ):
                 # Event D: cache_hit
                 emit_log(
                     logger,
@@ -380,9 +377,13 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                     request_id,
                     payment_id=payment_id,
                 )
-                try:
-                    net_vals = json.loads(row["raw_arm_net_values"] or "{}")
-                except Exception:
+                net_vals = persisted.get("raw_arm_net_values")
+                if isinstance(net_vals, str):
+                    try:
+                        net_vals = json.loads(net_vals)
+                    except Exception:
+                        net_vals = {}
+                elif not isinstance(net_vals, dict):
                     net_vals = {}
 
                 if net_vals:
@@ -390,19 +391,19 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 else:
                     model_decision = "WAIT"
 
-                verdict = str(row["guardrail_verdict"] or "")
+                verdict = str(persisted.get("guardrail_verdict") or "")
                 overridden = verdict.lower() == "overridden"
 
                 cached_dto = {
                     "payment_id": payment_id,
                     "model_decision": model_decision,
-                    "llm_decision": str(row["llm_proposed_decision"] or "WAIT"),
+                    "llm_decision": str(persisted.get("llm_proposed_decision") or "WAIT"),
                     "guardrail_overridden": overridden,
-                    "guardrail_reason": str(row["guardrail_reason"] or ""),
-                    "final_action": str(row["final_action"] or "WAIT"),
-                    "confidence": float(row["llm_confidence"] or 0.0),
-                    "risk_level": str(row["llm_risk_level"] or "none"),
-                    "reasoning": str(row["llm_reasoning"] or ""),
+                    "guardrail_reason": str(persisted.get("guardrail_reason") or ""),
+                    "final_action": str(persisted.get("final_action") or "WAIT"),
+                    "confidence": float(persisted.get("llm_confidence") or 0.0),
+                    "risk_level": str(persisted.get("llm_risk_level") or "none"),
+                    "reasoning": str(persisted.get("llm_reasoning") or ""),
                     "decision_source": "cache",
                     "request_id": request_id,
                 }
@@ -442,7 +443,8 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 "llm_deadline": llm_deadline,
                 "llm_semaphore": app.state.llm_semaphore,
                 "request_id": request_id,
-                "db": app.state.db,
+                "db": getattr(app.state, "db", None) if repository is None else None,
+                "repository": repository,
                 "dataset": getattr(app.state, "dataset", None),
             }
         }
@@ -456,7 +458,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             payment_id=payment_id,
         )
 
-        # Canonical async graph execution (persistence performed in execution node)
+        # Canonical async graph execution
         final_state: RecoveryState = await app.state.graph.ainvoke(initial_state, config=config)
 
         dto = format_response_dto(
@@ -468,6 +470,44 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             request_id=request_id,
             error=final_state.get("error"),
         )
+
+        # Persist through repository.save_decision_with_event(...)
+        if repository is not None:
+            llm_dec = final_state.get("llm_decision", {})
+            g_res = final_state.get("guardrail_result", {})
+            raw_nets = final_state.get("arm_net_values", {})
+            model_dec = max(raw_nets, key=raw_nets.get) if raw_nets else "WAIT"
+
+            await repository.save_decision_with_event(
+                payment_id=payment_id,
+                decision_id=f"dec_{payment_id}",
+                request_id=request_id,
+                raw_arm_probabilities=final_state.get("arm_probabilities"),
+                raw_arm_net_values=final_state.get("arm_net_values"),
+                llm_proposed_decision=llm_dec.get("decision", "WAIT"),
+                llm_confidence=float(llm_dec.get("confidence", 1.0)) if llm_dec else 0.0,
+                llm_reasoning=llm_dec.get("reasoning", ""),
+                llm_risk_level=llm_dec.get("risk_level", "medium"),
+                expected_incremental_value=float(llm_dec.get("expected_incremental_value", 0.0)) if llm_dec else 0.0,
+                guardrail_verdict=g_res.get("status", "passed") if not final_state.get("error") else "N/A — error path",
+                guardrail_reason=g_res.get("reason", "") if not final_state.get("error") else "Bypassed due to error",
+                guardrail_overridden=bool(g_res.get("overridden", False)),
+                final_action=dto["final_action"],
+                decision_source=dto["decision_source"],
+                model_decision=model_dec,
+                error=final_state.get("error"),
+                evaluated_at=datetime.datetime.now(datetime.timezone.utc),
+                state_fingerprint=current_fingerprint,
+                state=final_state,
+            )
+            emit_log(
+                logger,
+                logging.INFO,
+                "audit_persisted",
+                request_id,
+                payment_id=payment_id,
+                decision_id=f"dec_{payment_id}",
+            )
 
         # Event G: final_action_selected
         emit_log(

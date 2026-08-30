@@ -5,6 +5,7 @@ Test suite for DecisionRepository abstraction:
 - OFFLINE unit tests for InMemoryDecisionRepository (zero database dependency)
 - Protocol conformity checks
 - POSTGRESQL integration tests for PostgresDecisionRepository (when TEST_DATABASE_URL is set)
+- Day 8D: Atomic transaction tests for save_decision_with_event()
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from decision_engine.persistence.in_memory import InMemoryDecisionRepository
+from decision_engine.persistence.sqlite import SqliteDecisionRepository
 from decision_engine.persistence.migrate import run_migrations
 from decision_engine.persistence.postgres import PostgresDecisionRepository
 from decision_engine.persistence.repository import DecisionRepository
@@ -27,6 +29,7 @@ from decision_engine.persistence.repository import DecisionRepository
 TEST_DB_URL = os.getenv("TEST_DATABASE_URL")
 CONTROLLED_PAYMENT_ID = "test_repo_pay_001"
 CONTROLLED_PAYMENT_ID_2 = "test_repo_pay_002"
+CONTROLLED_PAYMENT_ID_ATOMIC = "test_repo_pay_atomic"
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +39,14 @@ CONTROLLED_PAYMENT_ID_2 = "test_repo_pay_002"
 def test_protocol_conformity_in_memory() -> None:
     """Verify InMemoryDecisionRepository implements the DecisionRepository Protocol."""
     repo = InMemoryDecisionRepository()
+    assert isinstance(repo, DecisionRepository)
+
+
+def test_protocol_conformity_sqlite() -> None:
+    """Verify SqliteDecisionRepository implements the DecisionRepository Protocol."""
+    from unittest.mock import MagicMock
+    mock_db = MagicMock()
+    repo = SqliteDecisionRepository(mock_db)
     assert isinstance(repo, DecisionRepository)
 
 
@@ -404,3 +415,347 @@ async def test_postgres_missing_payment(clean_postgres_repo: PostgresDecisionRep
     repo = clean_postgres_repo
     assert await repo.get_current_decision("pay_missing_pg_999") is None
     assert await repo.get_events("pay_missing_pg_999") == []
+
+
+# ---------------------------------------------------------------------------
+# Day 8D: Atomic Transaction Tests (save_decision_with_event)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def clean_postgres_repo_atomic():
+    """
+    Fixture for Day 8D atomicity tests.
+    Cleans CONTROLLED_PAYMENT_ID_ATOMIC rows before and after each test.
+    """
+    if not TEST_DB_URL:
+        pytest.skip("TEST_DATABASE_URL is not set.")
+
+    run_migrations(database_url=TEST_DB_URL)
+
+    test_ids = [CONTROLLED_PAYMENT_ID_ATOMIC]
+
+    def _cleanup() -> None:
+        with psycopg.connect(TEST_DB_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM decision_audit WHERE payment_id = ANY(%s);",
+                    (test_ids,),
+                )
+                cur.execute(
+                    "DELETE FROM decision_audit_events WHERE payment_id = ANY(%s);",
+                    (test_ids,),
+                )
+            conn.commit()
+
+    _cleanup()
+    repo = PostgresDecisionRepository(database_url=TEST_DB_URL)
+    yield repo
+    _cleanup()
+
+
+@integration_mark
+@pytest.mark.asyncio
+async def test_day8d_atomic_successful_write(
+    clean_postgres_repo_atomic: PostgresDecisionRepository,
+) -> None:
+    """
+    Day 8D (1): save_decision_with_event() with no failure.
+    Exactly 1 decision_audit row and 1 decision_audit_events row must exist afterward.
+    """
+    repo = clean_postgres_repo_atomic
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    await repo.save_decision_with_event(
+        payment_id=CONTROLLED_PAYMENT_ID_ATOMIC,
+        decision_id="dec_atomic_ok",
+        event_decision_id="ev_atomic_ok",
+        final_action="RETRY",
+        decision_source="llm",
+        llm_proposed_decision="RETRY",
+        llm_confidence=0.92,
+        evaluated_at=now,
+    )
+
+    # Verify decision_audit row
+    decision = await repo.get_current_decision(CONTROLLED_PAYMENT_ID_ATOMIC)
+    assert decision is not None, "decision_audit row must exist after successful atomic write"
+    assert decision["payment_id"] == CONTROLLED_PAYMENT_ID_ATOMIC
+    assert decision["decision_id"] == "dec_atomic_ok"
+    assert decision["final_action"] == "RETRY"
+
+    # Verify decision_audit_events row
+    events = await repo.get_events(CONTROLLED_PAYMENT_ID_ATOMIC)
+    assert len(events) == 1, "Exactly 1 event row must exist after successful atomic write"
+    assert events[0]["decision_id"] == "ev_atomic_ok"
+    assert events[0]["final_action"] == "RETRY"
+
+
+@integration_mark
+@pytest.mark.asyncio
+async def test_day8d_atomic_rollback_on_second_write_failure(
+    clean_postgres_repo_atomic: PostgresDecisionRepository,
+) -> None:
+    """
+    Day 8D (2): save_decision_with_event() with a forced second-write failure.
+
+    Failure mechanism: pre-insert a row with the same event_decision_id (PK) into
+    decision_audit_events. The second write inside save_decision_with_event() then
+    collides on the PRIMARY KEY constraint, raising a psycopg UniqueViolation.
+    psycopg's `async with conn.transaction():` context manager rolls back the ENTIRE
+    transaction — the decision_audit UPSERT is also undone.
+
+    Expected outcome:
+      - An exception is raised (UniqueViolation / IntegrityError)
+      - 0 rows in decision_audit for CONTROLLED_PAYMENT_ID_ATOMIC
+      - 0 rows in decision_audit_events for CONTROLLED_PAYMENT_ID_ATOMIC
+    """
+    repo = clean_postgres_repo_atomic
+    now = datetime.datetime.now(datetime.timezone.utc)
+    clashing_event_id = "ev_atomic_collision"
+
+    # Pre-insert the event row with the same PK that save_decision_with_event will try to use.
+    # This causes the second write inside the atomic operation to violate the PK constraint.
+    with psycopg.connect(TEST_DB_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO decision_audit_events (
+                    decision_id, payment_id, evaluated_at, final_action
+                ) VALUES (%s, %s, %s, %s);
+                """,
+                (clashing_event_id, CONTROLLED_PAYMENT_ID_ATOMIC, now, "WAIT"),
+            )
+        conn.commit()
+
+    # Now attempt the atomic write — the second INSERT must collide on PK
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        await repo.save_decision_with_event(
+            payment_id=CONTROLLED_PAYMENT_ID_ATOMIC,
+            decision_id="dec_atomic_fail",
+            event_decision_id=clashing_event_id,  # same PK → triggers rollback
+            final_action="RETRY",
+            decision_source="llm",
+            llm_proposed_decision="RETRY",
+            llm_confidence=0.88,
+            evaluated_at=now,
+        )
+
+    # The transaction must have been rolled back: decision_audit row must NOT exist
+    decision = await repo.get_current_decision(CONTROLLED_PAYMENT_ID_ATOMIC)
+    assert decision is None, (
+        "decision_audit row must NOT exist after atomic rollback — "
+        "the first write (decision_audit UPSERT) must have been rolled back too"
+    )
+
+    # The pre-existing event row (inserted outside the transaction) still exists.
+    # The failed atomic write must not have added another row for CONTROLLED_PAYMENT_ID_ATOMIC
+    # with decision_id='dec_atomic_fail'.
+    events = await repo.get_events(CONTROLLED_PAYMENT_ID_ATOMIC)
+    event_ids = [e["decision_id"] for e in events]
+    assert "dec_atomic_fail" not in event_ids, (
+        "The rolled-back event_decision_id must not appear in decision_audit_events"
+    )
+
+
+@integration_mark
+@pytest.mark.asyncio
+async def test_day8d_atomic_clean_write_after_rollback(
+    clean_postgres_repo_atomic: PostgresDecisionRepository,
+) -> None:
+    """
+    Day 8D (3): After a failed atomic write, the database is still fully usable.
+    A subsequent successful save_decision_with_event() call must produce exactly
+    1 decision_audit row and 1 decision_audit_events row.
+    """
+    repo = clean_postgres_repo_atomic
+    now = datetime.datetime.now(datetime.timezone.utc)
+    clashing_event_id = "ev_atomic_collision_2"
+
+    # Step A: create a PK collision to trigger rollback
+    with psycopg.connect(TEST_DB_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO decision_audit_events (
+                    decision_id, payment_id, evaluated_at, final_action
+                ) VALUES (%s, %s, %s, %s);
+                """,
+                (clashing_event_id, CONTROLLED_PAYMENT_ID_ATOMIC, now, "WAIT"),
+            )
+        conn.commit()
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        await repo.save_decision_with_event(
+            payment_id=CONTROLLED_PAYMENT_ID_ATOMIC,
+            decision_id="dec_atomic_fail_2",
+            event_decision_id=clashing_event_id,
+            final_action="WAIT",
+            decision_source="model",
+            evaluated_at=now,
+        )
+
+    # Confirm rollback
+    assert await repo.get_current_decision(CONTROLLED_PAYMENT_ID_ATOMIC) is None
+
+    # Step B: clean write with unique IDs — database must still be usable
+    now2 = datetime.datetime.now(datetime.timezone.utc)
+    await repo.save_decision_with_event(
+        payment_id=CONTROLLED_PAYMENT_ID_ATOMIC,
+        decision_id="dec_atomic_recovery",
+        event_decision_id="ev_atomic_recovery",
+        final_action="ESCALATE",
+        decision_source="llm",
+        llm_proposed_decision="ESCALATE",
+        llm_confidence=0.77,
+        evaluated_at=now2,
+    )
+
+    decision = await repo.get_current_decision(CONTROLLED_PAYMENT_ID_ATOMIC)
+    assert decision is not None, "Database must be usable after rollback"
+    assert decision["decision_id"] == "dec_atomic_recovery"
+    assert decision["final_action"] == "ESCALATE"
+
+    events = await repo.get_events(CONTROLLED_PAYMENT_ID_ATOMIC)
+    recovery_event_ids = [e["decision_id"] for e in events]
+    assert "ev_atomic_recovery" in recovery_event_ids, (
+        "Recovery event row must exist in decision_audit_events"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Day 8E: State-Fingerprint Cache Semantics Tests (A through F)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_in_memory_cache_semantics_a_through_f() -> None:
+    """
+    Day 8E (Section 9): Pure repository unit tests using InMemoryDecisionRepository.
+    A. matching fingerprint -> cache hit
+    B. mismatching fingerprint -> cache miss
+    C. missing payment -> cache miss
+    D. force recompute -> bypass
+    E. cache hit does not append an event
+    F. fresh evaluation uses atomic save_decision_with_event
+    """
+    repo = InMemoryDecisionRepository()
+    pid = "pay_inmem_cache_001"
+    fp_v1 = "fp_initial_v1_hex"
+    fp_v2 = "fp_mutated_v2_hex"
+
+    # C. Missing payment -> cache miss
+    assert await repo.get_current_decision("pay_nonexistent") is None
+
+    # F. Fresh evaluation uses atomic save_decision_with_event
+    now1 = datetime.datetime.now(datetime.timezone.utc)
+    await repo.save_decision_with_event(
+        payment_id=pid,
+        decision_id="dec_001",
+        event_decision_id="ev_001",
+        final_action="RETRY",
+        decision_source="llm",
+        state_fingerprint=fp_v1,
+        evaluated_at=now1,
+    )
+    decision = await repo.get_current_decision(pid)
+    assert decision is not None
+    assert decision["state_fingerprint"] == fp_v1
+    assert len(await repo.get_events(pid)) == 1
+
+    # A. Matching fingerprint -> cache hit
+    cached = await repo.get_current_decision(pid)
+    assert cached is not None and cached["state_fingerprint"] == fp_v1
+
+    # E. Cache hit does not append an event
+    # On cache hit, caller does NOT write to repo:
+    assert len(await repo.get_events(pid)) == 1
+
+    # B. Mismatching fingerprint -> cache miss
+    # If caller compares cached["state_fingerprint"] != fp_v2:
+    assert cached["state_fingerprint"] != fp_v2  # Cache MISS!
+
+    # D. Force recompute -> bypass cache and perform fresh atomic write
+    now2 = datetime.datetime.now(datetime.timezone.utc)
+    await repo.save_decision_with_event(
+        payment_id=pid,
+        decision_id="dec_002",
+        event_decision_id="ev_002",
+        final_action="WAIT",
+        decision_source="llm",
+        state_fingerprint=fp_v2,
+        evaluated_at=now2,
+    )
+    # Decision row updated to new state
+    updated_dec = await repo.get_current_decision(pid)
+    assert updated_dec["state_fingerprint"] == fp_v2
+    assert updated_dec["final_action"] == "WAIT"
+    # Event ledger has 2 events
+    assert len(await repo.get_events(pid)) == 2
+
+
+@integration_mark
+@pytest.mark.asyncio
+async def test_postgres_cache_semantics_a_through_f(
+    clean_postgres_repo: PostgresDecisionRepository,
+) -> None:
+    """
+    Day 8E (Section 9): PostgreSQL integration test for cache semantics against Docker PostgreSQL.
+    A. matching fingerprint -> cache hit
+    B. mismatching fingerprint -> cache miss
+    C. missing payment -> cache miss
+    D. force recompute -> bypass
+    E. cache hit does not append an event
+    F. fresh evaluation uses atomic save_decision_with_event
+    """
+    repo = clean_postgres_repo
+    pid = CONTROLLED_PAYMENT_ID
+    fp_v1 = "fp_pg_test_v1_00000000000000000000000000000000000000000000000000000"
+    fp_v2 = "fp_pg_test_v2_00000000000000000000000000000000000000000000000000000"
+
+    # C. Missing payment -> cache miss
+    assert await repo.get_current_decision("pay_missing_pg_check") is None
+
+    # F. Fresh evaluation uses atomic save_decision_with_event
+    now1 = datetime.datetime.now(datetime.timezone.utc)
+    await repo.save_decision_with_event(
+        payment_id=pid,
+        decision_id="dec_pg_cache_1",
+        event_decision_id="ev_pg_cache_1",
+        final_action="RETRY",
+        decision_source="llm",
+        state_fingerprint=fp_v1,
+        evaluated_at=now1,
+    )
+
+    decision = await repo.get_current_decision(pid)
+    assert decision is not None
+    assert decision["state_fingerprint"] == fp_v1
+    assert len(await repo.get_events(pid)) == 1
+
+    # A. Matching fingerprint -> cache hit
+    cached = await repo.get_current_decision(pid)
+    assert cached is not None
+    assert cached.get("state_fingerprint") == fp_v1
+
+    # E. Cache hit does not append an event
+    assert len(await repo.get_events(pid)) == 1
+
+    # B. Mismatching fingerprint -> cache miss
+    assert cached.get("state_fingerprint") != fp_v2
+
+    # D. Force recompute -> bypass cache and perform fresh write
+    now2 = datetime.datetime.now(datetime.timezone.utc)
+    await repo.save_decision_with_event(
+        payment_id=pid,
+        decision_id="dec_pg_cache_2",
+        event_decision_id="ev_pg_cache_2",
+        final_action="WAIT",
+        decision_source="llm",
+        state_fingerprint=fp_v2,
+        evaluated_at=now2,
+    )
+
+    updated_dec = await repo.get_current_decision(pid)
+    assert updated_dec is not None
+    assert updated_dec["state_fingerprint"] == fp_v2
+    assert updated_dec["final_action"] == "WAIT"
+    assert len(await repo.get_events(pid)) == 2

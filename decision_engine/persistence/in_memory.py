@@ -69,6 +69,21 @@ class InMemoryDecisionRepository:
         sorted_events = sorted(events, key=_sort_key)
         return [dict(ev) for ev in sorted_events]
 
+    async def save_decision_with_event(self, **kwargs: Any) -> None:
+        """
+        Atomically persist a current-decision record and append an audit event record.
+        """
+        payment_id = kwargs.get("payment_id")
+        if not payment_id:
+            raise ValueError("payment_id is required for save_decision_with_event")
+
+        await self.save_current_decision(**kwargs)
+
+        event_data = dict(kwargs)
+        if "event_decision_id" in kwargs:
+            event_data["decision_id"] = kwargs["event_decision_id"]
+        await self.append_decision_event(**event_data)
+
     def clear(self) -> None:
         """Clear all stored in-memory decisions and event logs for test isolation."""
         self._decisions.clear()

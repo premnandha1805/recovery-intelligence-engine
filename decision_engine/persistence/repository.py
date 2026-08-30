@@ -105,3 +105,38 @@ class DecisionRepository(Protocol):
             List of audit event records, or empty list if none exist.
         """
         ...
+
+    async def save_decision_with_event(
+        self, **kwargs: Any
+    ) -> None:
+        """
+        Atomically persist a current-decision record and an audit event record
+        within a single transaction.
+
+        Parameters
+        ----------
+        **kwargs : Any
+            Must include payment_id.
+            Canonical fields:
+            - payment_id: str (required)
+            - decision_id: str
+            - event_decision_id: str | None
+            - request_id: str | None
+            - raw_arm_probabilities: dict[str, float] | None
+            - raw_arm_net_values: dict[str, float] | None
+            - llm_proposed_decision: str | None
+            - llm_confidence: float | None
+            - llm_reasoning: str | None
+            - llm_risk_level: str | None
+            - expected_incremental_value: float | None
+            - guardrail_verdict: str | None
+            - guardrail_reason: str | None
+            - guardrail_overridden: bool | None
+            - final_action: str
+            - model_decision: str | None
+            - decision_source: str
+            - error: str | None
+            - evaluated_at: datetime | str
+            - state_fingerprint: str | None
+        """
+        ...
