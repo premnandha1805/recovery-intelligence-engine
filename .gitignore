@@ -32,6 +32,7 @@ Thumbs.db
 # Misc
 *.log
 .env
+.env.test
 
 # SQLite local audit database
 decision_engine/*.db

@@ -28,6 +28,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import logging
+import os
 import pathlib
 import time
 from typing import Any, Optional
@@ -38,6 +39,11 @@ from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from decision_engine.persistence.postgres import (
+    create_postgres_pool,
+    close_postgres_pool,
+)
 
 from decision_engine.state import RecoveryState
 from decision_engine.graph import create_recovery_graph
@@ -138,6 +144,15 @@ async def get_payment_lock(app_instance: FastAPI, payment_id: str) -> asyncio.Lo
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
+    # 0. PostgreSQL connection pool lifecycle (Day 8C)
+    # Default remains 'sqlite' to preserve Day 7 runtime unchanged.
+    # When PERSISTENCE_BACKEND=postgres, pool creation is fail-fast.
+    persistence_backend = os.getenv("PERSISTENCE_BACKEND", "sqlite").lower()
+    app_instance.state.db_pool = None
+    if persistence_backend == "postgres":
+        logger.info("Initializing PostgreSQL AsyncConnectionPool (PERSISTENCE_BACKEND=postgres)...")
+        app_instance.state.db_pool = await create_postgres_pool()
+
     # 1. Initialize CausalUpliftPolicy exactly once
     logger.info("Initializing CausalUpliftPolicy...")
     try:
@@ -198,6 +213,11 @@ async def lifespan(app_instance: FastAPI):
     logger.info("Closing aiosqlite connection...")
     if hasattr(app_instance.state, "db") and app_instance.state.db is not None:
         await app_instance.state.db.close()
+
+    # 7. On shutdown, close PostgreSQL connection pool cleanly if initialized [Day 8C]
+    if getattr(app_instance.state, "db_pool", None) is not None:
+        logger.info("Closing PostgreSQL connection pool...")
+        await close_postgres_pool(app_instance.state.db_pool)
 
 
 # ── FastAPI App Instance ─────────────────────────────────────────────────────
