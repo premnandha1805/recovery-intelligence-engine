@@ -71,7 +71,9 @@ def get_pool_config(
         DB_POOL_MAX            default 12 (>= DB_POOL_MIN)
         DB_CONNECT_TIMEOUT_MS  default 3000 (> 0)
     """
-    raw_url = database_url if database_url is not None else (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL"))
+    raw_url = database_url if database_url is not None else (
+        os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or os.getenv("TEST_DATABASE_URL")
+    )
     valid_url = validate_database_url(raw_url)
 
     # DB_POOL_MIN: integer >= 1

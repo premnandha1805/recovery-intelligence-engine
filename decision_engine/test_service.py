@@ -25,6 +25,11 @@ M. Graceful shutdown closes aiosqlite connection cleanly [FIX-8]
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 import json
 import logging
 import pathlib
@@ -579,15 +584,16 @@ async def test_m_graceful_shutdown_closes_connection(tmp_path: pathlib.Path):
     test_db_path = str(tmp_path / "shutdown_test.db")
 
     from unittest.mock import patch
-    with patch("decision_engine.service.DEFAULT_AUDIT_DB_PATH", test_db_path):
-        async with lifespan(app):
-            assert app.state.db is not None
-            async with app.state.db.execute("SELECT 1") as cur:
-                res = await cur.fetchone()
-                assert res[0] == 1
+    with patch.dict(os.environ, {"PERSISTENCE_BACKEND": "sqlite"}):
+        with patch("decision_engine.service.DEFAULT_AUDIT_DB_PATH", test_db_path):
+            async with lifespan(app):
+                assert app.state.db is not None
+                async with app.state.db.execute("SELECT 1") as cur:
+                    res = await cur.fetchone()
+                    assert res[0] == 1
 
-        with pytest.raises(Exception):
-            await app.state.db.execute("SELECT 1")
+            with pytest.raises(Exception):
+                await app.state.db.execute("SELECT 1")
 
 
 @pytest.mark.asyncio

@@ -22,9 +22,15 @@ explicitly out of scope for Day 7. [FIX-4]
 from __future__ import annotations
 
 from dotenv import load_dotenv
+load_dotenv(".env.test")
 load_dotenv()
 
 import asyncio
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from contextlib import asynccontextmanager
 import datetime
 import json
@@ -144,10 +150,10 @@ async def get_payment_lock(app_instance: FastAPI, payment_id: str) -> asyncio.Lo
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    # 0. Persistence backend initialization (Day 8E)
-    # Default remains 'sqlite' to preserve Day 7 runtime unchanged.
-    # When PERSISTENCE_BACKEND=postgres, pool creation is fail-fast.
-    persistence_backend = os.getenv("PERSISTENCE_BACKEND", "sqlite").lower()
+    # 0. Persistence backend initialization (Day 8G Production Cutover)
+    # Default is 'postgres'. When PERSISTENCE_BACKEND=sqlite, Day 7 SQLite path is used.
+    # When PERSISTENCE_BACKEND=postgres, pool creation is fail-fast with zero SQLite fallback.
+    persistence_backend = os.getenv("PERSISTENCE_BACKEND", "postgres").lower()
     app_instance.state.persistence_backend = persistence_backend
     app_instance.state.db_pool = None
     app_instance.state.db = None
@@ -157,13 +163,17 @@ async def lifespan(app_instance: FastAPI):
         logger.info("Initializing PostgreSQL AsyncConnectionPool (PERSISTENCE_BACKEND=postgres)...")
         app_instance.state.db_pool = await create_postgres_pool()
         app_instance.state.repository = PostgresDecisionRepository(pool=app_instance.state.db_pool)
-    else:
-        # SQLite persistence backend (Day 7 default)
+    elif persistence_backend == "sqlite":
+        # SQLite persistence backend (Day 7 default / backward compatibility)
         db_path = str(DEFAULT_AUDIT_DB_PATH)
         logger.info(f"Opening SQLite repository at {db_path}...")
         db, repo = await open_sqlite_repository(db_path)
         app_instance.state.db = db
         app_instance.state.repository = repo
+    else:
+        raise ValueError(
+            f"Unsupported PERSISTENCE_BACKEND: {persistence_backend!r}. Must be 'postgres' or 'sqlite'."
+        )
 
     # 1. Initialize CausalUpliftPolicy exactly once
     logger.info("Initializing CausalUpliftPolicy...")
@@ -226,9 +236,12 @@ app = FastAPI(
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    req_id = request.headers.get("x-request-id")
+    headers = {"x-request-id": req_id} if req_id else None
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"error": {"code": "VALIDATION_ERROR", "message": "Invalid request payload"}},
+        headers=headers,
     )
 
 
@@ -236,18 +249,24 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def http_exception_handler(request: Request, exc: HTTPException):
     code = "VALIDATION_ERROR" if exc.status_code == 400 else "INTERNAL_ERROR"
     msg = exc.detail if isinstance(exc.detail, str) else "An error occurred"
+    req_id = request.headers.get("x-request-id")
+    headers = {"x-request-id": req_id} if req_id else None
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": code, "message": msg}},
+        headers=headers,
     )
 
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}")
+    req_id = request.headers.get("x-request-id")
+    headers = {"x-request-id": req_id} if req_id else None
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}},
+        headers=headers,
     )
 
 
@@ -257,12 +276,17 @@ async def generic_exception_handler(request: Request, exc: Exception):
 @app.get("/ready")
 async def health_check():
     """
-    Return status ok ONLY if policy and compiled graph initialized successfully.
+    Return status ok ONLY if policy, compiled graph, and repository are fully initialized.
     """
     policy_ready = getattr(app.state, "policy", None) is not None
     graph_ready = getattr(app.state, "graph", None) is not None
+    repo_ready = (
+        getattr(app.state, "repository", None) is not None
+        or getattr(app.state, "db", None) is not None
+        or getattr(app.state, "db_pool", None) is not None
+    )
 
-    if not policy_ready or not graph_ready:
+    if not policy_ready or not graph_ready or not repo_ready:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Engine components not fully initialized",
