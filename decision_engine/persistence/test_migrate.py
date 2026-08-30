@@ -26,6 +26,11 @@ from decision_engine.persistence.migrate import (
     sanitize_database_url,
 )
 
+from dotenv import load_dotenv
+
+load_dotenv(".env.test")
+load_dotenv()
+
 TEST_DB_URL = os.getenv("TEST_DATABASE_URL")
 MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent / "migrations"
 

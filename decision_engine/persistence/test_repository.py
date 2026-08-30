@@ -14,6 +14,7 @@ import asyncio
 import datetime
 import os
 import sys
+import uuid
 import pytest
 import psycopg
 
@@ -25,6 +26,11 @@ from decision_engine.persistence.sqlite import SqliteDecisionRepository
 from decision_engine.persistence.migrate import run_migrations
 from decision_engine.persistence.postgres import PostgresDecisionRepository
 from decision_engine.persistence.repository import DecisionRepository
+
+from dotenv import load_dotenv
+
+load_dotenv(".env.test")
+load_dotenv()
 
 TEST_DB_URL = os.getenv("TEST_DATABASE_URL")
 CONTROLLED_PAYMENT_ID = "test_repo_pay_001"
@@ -759,3 +765,299 @@ async def test_postgres_cache_semantics_a_through_f(
     assert updated_dec["state_fingerprint"] == fp_v2
     assert updated_dec["final_action"] == "WAIT"
     assert len(await repo.get_events(pid)) == 2
+
+
+# ---------------------------------------------------------------------------
+# Day 8F: Explicit InMemoryDecisionRepository Unit Tests (A through K)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_a_insert() -> None:
+    """A. insert: save a new decision; get_current_decision returns the same data."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_a_insert"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    await repo.save_current_decision(
+        payment_id=pid,
+        decision_id="dec_8f_a",
+        request_id="req_8f_a",
+        final_action="RETRY",
+        decision_source="llm",
+        llm_confidence=0.92,
+        state_fingerprint="fp_insert_001",
+        evaluated_at=now,
+    )
+    res = await repo.get_current_decision(pid)
+    assert res is not None
+    assert res["payment_id"] == pid
+    assert res["decision_id"] == "dec_8f_a"
+    assert res["request_id"] == "req_8f_a"
+    assert res["final_action"] == "RETRY"
+    assert res["decision_source"] == "llm"
+    assert res["llm_confidence"] == 0.92
+    assert res["state_fingerprint"] == "fp_insert_001"
+    assert res["evaluated_at"] == now
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_b_upsert() -> None:
+    """B. update / UPSERT: save same payment_id twice; second replaces current; only 1 row remains."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_b_upsert"
+
+    await repo.save_current_decision(
+        payment_id=pid,
+        decision_id="dec_first",
+        final_action="WAIT",
+        llm_confidence=0.50,
+    )
+    first = await repo.get_current_decision(pid)
+    assert first is not None
+    assert first["decision_id"] == "dec_first"
+    assert first["final_action"] == "WAIT"
+
+    # Second write for same payment_id
+    await repo.save_current_decision(
+        payment_id=pid,
+        decision_id="dec_second",
+        final_action="ESCALATE",
+        llm_confidence=0.98,
+    )
+    second = await repo.get_current_decision(pid)
+    assert second is not None
+    assert second["decision_id"] == "dec_second"
+    assert second["final_action"] == "ESCALATE"
+    assert second["llm_confidence"] == 0.98
+
+    # Assert only one current decision remains stored
+    assert len(repo._decisions) == 1
+    assert list(repo._decisions.keys()) == [pid]
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_c_lookup() -> None:
+    """C. lookup: existing payment returns decision; unknown payment returns None."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_c_existing"
+    await repo.save_current_decision(payment_id=pid, decision_id="dec_existing", final_action="RETRY")
+
+    # Existing lookup
+    found = await repo.get_current_decision(pid)
+    assert found is not None
+    assert found["payment_id"] == pid
+
+    # Unknown lookup
+    unknown = await repo.get_current_decision("pay_unknown_ghost")
+    assert unknown is None
+    assert await repo.get_events("pay_unknown_ghost") == []
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_d_fingerprint_mismatch() -> None:
+    """D. fingerprint mismatch: persisted FP1 != current FP2; assert cache-hit condition is false."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_d_mismatch"
+    fp1 = "fingerprint_v1_aaa"
+    fp2 = "fingerprint_v2_bbb"
+
+    await repo.save_current_decision(payment_id=pid, decision_id="dec_d", state_fingerprint=fp1)
+    persisted = await repo.get_current_decision(pid)
+    assert persisted is not None
+
+    cache_hit = (persisted.get("state_fingerprint") == fp2)
+    assert cache_hit is False, "Mismatching fingerprint must result in cache miss"
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_e_fingerprint_match_cache_hit() -> None:
+    """E. fingerprint match / cache hit: persisted FP1 == current FP1; assert cache-hit is true."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_e_match"
+    fp1 = "fingerprint_v1_stable"
+
+    await repo.save_current_decision(payment_id=pid, decision_id="dec_e", state_fingerprint=fp1)
+    persisted = await repo.get_current_decision(pid)
+    assert persisted is not None
+
+    cache_hit = (persisted.get("state_fingerprint") == fp1)
+    assert cache_hit is True, "Matching fingerprint must result in cache hit"
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_f_event_append() -> None:
+    """F. event append: append one event; verify event is retrievable."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_f_event"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    await repo.append_decision_event(
+        payment_id=pid,
+        decision_id="ev_001",
+        request_id="req_ev_001",
+        final_action="RETRY_NUDGE",
+        decision_source="llm",
+        evaluated_at=now,
+    )
+    events = await repo.get_events(pid)
+    assert len(events) == 1
+    assert events[0]["payment_id"] == pid
+    assert events[0]["decision_id"] == "ev_001"
+    assert events[0]["request_id"] == "req_ev_001"
+    assert events[0]["final_action"] == "RETRY_NUDGE"
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_g_multiple_events_same_payment() -> None:
+    """G. multiple events for same payment: append >=3 events; all remain present; none overwrite."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_g_multi"
+
+    t1 = datetime.datetime(2026, 8, 30, 10, 0, tzinfo=datetime.timezone.utc)
+    t2 = datetime.datetime(2026, 8, 30, 10, 5, tzinfo=datetime.timezone.utc)
+    t3 = datetime.datetime(2026, 8, 30, 10, 10, tzinfo=datetime.timezone.utc)
+
+    await repo.append_decision_event(payment_id=pid, decision_id="ev_1", final_action="RETRY", evaluated_at=t1)
+    await repo.append_decision_event(payment_id=pid, decision_id="ev_2", final_action="WAIT", evaluated_at=t2)
+    await repo.append_decision_event(payment_id=pid, decision_id="ev_3", final_action="ESCALATE", evaluated_at=t3)
+
+    events = await repo.get_events(pid)
+    assert len(events) == 3
+    event_ids = [e["decision_id"] for e in events]
+    actions = [e["final_action"] for e in events]
+    assert event_ids == ["ev_1", "ev_2", "ev_3"]
+    assert actions == ["RETRY", "WAIT", "ESCALATE"]
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_h_ordered_history() -> None:
+    """H. ordered history: insert events out of chronological order; get_events() returns ascending."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_h_order"
+
+    t_early = datetime.datetime(2026, 8, 30, 9, 0, tzinfo=datetime.timezone.utc)
+    t_mid = datetime.datetime(2026, 8, 30, 12, 0, tzinfo=datetime.timezone.utc)
+    t_late = datetime.datetime(2026, 8, 30, 15, 0, tzinfo=datetime.timezone.utc)
+
+    # Insert in shuffle: late, early, mid
+    await repo.append_decision_event(payment_id=pid, decision_id="ev_late", evaluated_at=t_late)
+    await repo.append_decision_event(payment_id=pid, decision_id="ev_early", evaluated_at=t_early)
+    await repo.append_decision_event(payment_id=pid, decision_id="ev_mid", evaluated_at=t_mid)
+
+    events = await repo.get_events(pid)
+    assert len(events) == 3
+    # Must be sorted by evaluated_at ascending
+    assert events[0]["decision_id"] == "ev_early"
+    assert events[1]["decision_id"] == "ev_mid"
+    assert events[2]["decision_id"] == "ev_late"
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_i_uuid_uniqueness() -> None:
+    """I. UUID uniqueness: append multiple events generated with unique IDs; assert each unique."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_i_uuid"
+    generated_ids = [str(uuid.uuid4()) for _ in range(10)]
+
+    for uid in generated_ids:
+        await repo.append_decision_event(payment_id=pid, decision_id=uid, final_action="RETRY")
+
+    events = await repo.get_events(pid)
+    assert len(events) == 10
+    retrieved_ids = [e["decision_id"] for e in events]
+    assert len(set(retrieved_ids)) == 10, "Every event decision_id must be distinct"
+    assert set(retrieved_ids) == set(generated_ids)
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_j_transaction_success() -> None:
+    """J. transaction success: save_decision_with_event succeeds; current exists; exactly 1 event exists."""
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_j_atomic"
+    dec_id = "dec_main_001"
+    ev_id = "ev_ledger_001"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    await repo.save_decision_with_event(
+        payment_id=pid,
+        decision_id=dec_id,
+        event_decision_id=ev_id,
+        request_id="req_corr_999",
+        final_action="RETRY",
+        decision_source="llm",
+        state_fingerprint="fp_atomic_success",
+        evaluated_at=now,
+    )
+
+    # Verify decision_audit row exists
+    decision = await repo.get_current_decision(pid)
+    assert decision is not None
+    assert decision["payment_id"] == pid
+    assert decision["decision_id"] == dec_id
+    assert decision["request_id"] == "req_corr_999"
+    assert decision["final_action"] == "RETRY"
+
+    # Verify decision_audit_events contains exactly one event
+    events = await repo.get_events(pid)
+    assert len(events) == 1
+    assert events[0]["payment_id"] == pid
+    assert events[0]["decision_id"] == ev_id
+    assert events[0]["request_id"] == "req_corr_999"
+    assert events[0]["final_action"] == "RETRY"
+
+
+@pytest.mark.asyncio
+async def test_day8f_in_memory_k_transaction_rollback() -> None:
+    """
+    K. transaction rollback: force the event append portion to fail;
+    assert all-or-nothing rollback semantics: neither current decision nor event remains committed.
+    """
+    repo = InMemoryDecisionRepository()
+    pid = "pay_8f_k_rollback"
+
+    # Verify initially absent
+    assert await repo.get_current_decision(pid) is None
+    assert await repo.get_events(pid) == []
+
+    # Force event append portion to fail
+    async def failing_append(**kwargs: Any) -> None:
+        raise RuntimeError("Simulated failure in in-memory event ledger append")
+
+    repo.append_decision_event = failing_append
+
+    with pytest.raises(RuntimeError, match="Simulated failure in in-memory event ledger append"):
+        await repo.save_decision_with_event(
+            payment_id=pid,
+            decision_id="dec_should_rollback",
+            event_decision_id="ev_should_rollback",
+            final_action="RETRY",
+            state_fingerprint="fp_rollback_test",
+        )
+
+    # All-or-nothing assertion: current decision was rolled back and event was not committed
+    assert await repo.get_current_decision(pid) is None, (
+        "Current decision must be rolled back to None when event append fails"
+    )
+    assert await repo.get_events(pid) == [], (
+        "Event ledger must remain empty when event append fails"
+    )
+
+    # Also verify rollback when a previous decision already existed (preserves prior state)
+    repo2 = InMemoryDecisionRepository()
+    pid2 = "pay_8f_k_prior"
+    await repo2.save_current_decision(payment_id=pid2, decision_id="dec_prior_v1", final_action="WAIT")
+    repo2.append_decision_event = failing_append
+
+    with pytest.raises(RuntimeError):
+        await repo2.save_decision_with_event(
+            payment_id=pid2,
+            decision_id="dec_new_failing",
+            final_action="RETRY",
+        )
+
+    preserved = await repo2.get_current_decision(pid2)
+    assert preserved is not None
+    assert preserved["decision_id"] == "dec_prior_v1", (
+        "Previous decision must be restored when transaction rolls back"
+    )
+    assert preserved["final_action"] == "WAIT"
+    assert await repo2.get_events(pid2) == []

@@ -72,17 +72,32 @@ class InMemoryDecisionRepository:
     async def save_decision_with_event(self, **kwargs: Any) -> None:
         """
         Atomically persist a current-decision record and append an audit event record.
+        Maintains all-or-nothing rollback semantics if either operation fails.
         """
         payment_id = kwargs.get("payment_id")
         if not payment_id:
             raise ValueError("payment_id is required for save_decision_with_event")
 
+        prev_decision = dict(self._decisions[payment_id]) if payment_id in self._decisions else None
+        prev_events_len = len(self._events.get(payment_id, []))
+
         await self.save_current_decision(**kwargs)
 
-        event_data = dict(kwargs)
-        if "event_decision_id" in kwargs:
-            event_data["decision_id"] = kwargs["event_decision_id"]
-        await self.append_decision_event(**event_data)
+        try:
+            event_data = dict(kwargs)
+            if "event_decision_id" in kwargs:
+                event_data["decision_id"] = kwargs["event_decision_id"]
+            await self.append_decision_event(**event_data)
+        except Exception:
+            # Rollback current decision
+            if prev_decision is None:
+                self._decisions.pop(payment_id, None)
+            else:
+                self._decisions[payment_id] = prev_decision
+            # Rollback appended event
+            if payment_id in self._events:
+                self._events[payment_id] = self._events[payment_id][:prev_events_len]
+            raise
 
     def clear(self) -> None:
         """Clear all stored in-memory decisions and event logs for test isolation."""

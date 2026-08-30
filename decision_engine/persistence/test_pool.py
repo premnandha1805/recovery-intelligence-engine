@@ -32,6 +32,10 @@ from decision_engine.persistence.postgres import (
     validate_database_url,
 )
 from decision_engine.service import app, lifespan
+from dotenv import load_dotenv
+
+load_dotenv(".env.test")
+load_dotenv()
 
 TEST_DB_URL = os.getenv("TEST_DATABASE_URL")
 integration_mark = pytest.mark.skipif(
