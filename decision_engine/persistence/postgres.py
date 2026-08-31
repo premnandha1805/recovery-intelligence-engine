@@ -225,6 +225,45 @@ async def close_postgres_pool(pool: Optional[AsyncConnectionPool]) -> None:
         logger.warning(f"Error during PostgreSQL connection pool shutdown: {exc}")
 
 
+# ── Health Probe ─────────────────────────────────────────────────────────────
+
+HEALTH_PROBE_TIMEOUT_S = 2.0
+
+
+async def check_pool_health(
+    pool: Optional[AsyncConnectionPool],
+    timeout_s: float = HEALTH_PROBE_TIMEOUT_S,
+) -> str:
+    """
+    Lightweight PostgreSQL health probe using the existing connection pool.
+
+    Acquires a connection from the pool, executes ``SELECT 1``, and returns
+    ``"ok"`` if successful within *timeout_s* seconds, or ``"unavailable"``
+    on any failure (closed pool, network error, timeout).
+
+    Security: never exposes DATABASE_URL, credentials, or stack traces.
+    """
+    if pool is None:
+        return "unavailable"
+
+    if getattr(pool, "closed", False):
+        return "unavailable"
+
+    try:
+        async with asyncio.timeout(timeout_s):
+            async with pool.connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT 1;")
+                    row = await cur.fetchone()
+                    if row and row[0] == 1:
+                        return "ok"
+                    return "unavailable"
+    except Exception:
+        # Catch all: timeout, connection errors, pool exhaustion, etc.
+        # Never leak exception details to caller.
+        return "unavailable"
+
+
 # ── Decision Repository ──────────────────────────────────────────────────────
 
 class PostgresDecisionRepository:

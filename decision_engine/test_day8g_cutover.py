@@ -179,7 +179,9 @@ async def test_day8g_test_a_health_endpoint():
             resp = await client.get("/health")
             assert resp.status_code == 200
             data = resp.json()
-            assert data == {"status": "ok"}
+            assert data["status"] == "ok"
+            assert data["dependencies"]["database"] == "ok"
+            assert data["dependencies"]["decision_engine"] == "ok"
             assert "password" not in resp.text.lower()
             assert "traceback" not in resp.text.lower()
     finally:

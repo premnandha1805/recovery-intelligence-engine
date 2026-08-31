@@ -52,6 +52,7 @@ from decision_engine.persistence import (
     SqliteDecisionRepository,
     create_postgres_pool,
     close_postgres_pool,
+    check_pool_health,
 )
 from decision_engine.persistence.sqlite import open_sqlite_repository
 
@@ -276,7 +277,10 @@ async def generic_exception_handler(request: Request, exc: Exception):
 @app.get("/ready")
 async def health_check():
     """
-    Return status ok ONLY if policy, compiled graph, and repository are fully initialized.
+    Return structured health status including database dependency probe.
+
+    PostgreSQL mode: probes pool via SELECT 1 with ~2s timeout.
+    SQLite mode: reports decision_engine readiness only (no database dependency).
     """
     policy_ready = getattr(app.state, "policy", None) is not None
     graph_ready = getattr(app.state, "graph", None) is not None
@@ -286,13 +290,32 @@ async def health_check():
         or getattr(app.state, "db_pool", None) is not None
     )
 
-    if not policy_ready or not graph_ready or not repo_ready:
+    engine_ok = policy_ready and graph_ready and repo_ready
+
+    persistence_backend = getattr(app.state, "persistence_backend", "sqlite")
+
+    if persistence_backend == "postgres":
+        pool = getattr(app.state, "db_pool", None)
+        db_status = await check_pool_health(pool)
+    else:
+        # SQLite mode: no PostgreSQL dependency to probe
+        db_status = "ok"
+
+    if not engine_ok:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Engine components not fully initialized",
         )
 
-    return {"status": "ok"}
+    overall_status = "ok" if db_status == "ok" else "degraded"
+
+    return {
+        "status": overall_status,
+        "dependencies": {
+            "database": db_status,
+            "decision_engine": "ok",
+        },
+    }
 
 
 # ── Decision Evaluation Endpoint ─────────────────────────────────────────────

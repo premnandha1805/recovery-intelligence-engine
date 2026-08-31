@@ -46,6 +46,7 @@ import pytest
 from decision_engine.audit import CREATE_TABLE_SQL, CREATE_EVENTS_TABLE_SQL, CREATE_EVENTS_INDEX_SQL
 from decision_engine.reasoning_node import LLMDecision
 from decision_engine.graph import create_recovery_graph
+from decision_engine.persistence.sqlite import SqliteDecisionRepository
 from decision_engine.service import (
     app,
     lifespan,
@@ -120,9 +121,12 @@ async def init_test_app(tmp_path: pathlib.Path):
         use_async=True,
     )
 
+    app.state.persistence_backend = "sqlite"
     app.state.policy = mock_policy
     app.state.graph = graph
     app.state.db = db
+    app.state.db_pool = None
+    app.state.repository = SqliteDecisionRepository(db)
     app.state.llm_semaphore = semaphore
     app.state.payment_locks = {}
     app.state.locks_mutex = asyncio.Lock()
@@ -142,12 +146,16 @@ async def test_a_health_success(tmp_path: pathlib.Path):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/health")
             assert resp.status_code == 200
-            assert resp.json() == {"status": "ok"}
+            data = resp.json()
+            assert data["status"] == "ok"
+            assert data["dependencies"]["decision_engine"] == "ok"
 
             # Alias check: /ready
             resp_ready = await client.get("/ready")
             assert resp_ready.status_code == 200
-            assert resp_ready.json() == {"status": "ok"}
+            data_ready = resp_ready.json()
+            assert data_ready["status"] == "ok"
+            assert data_ready["dependencies"]["decision_engine"] == "ok"
     finally:
         await db.close()
 
