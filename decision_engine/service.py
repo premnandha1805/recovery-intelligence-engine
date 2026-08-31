@@ -261,8 +261,15 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}")
     req_id = request.headers.get("x-request-id")
+    emit_log(
+        logger,
+        logging.ERROR,
+        "unhandled_exception",
+        req_id or "unknown",
+        error=str(exc),
+        error_type=type(exc).__name__,
+    )
     headers = {"x-request-id": req_id} if req_id else None
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
