@@ -28,6 +28,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
+from decision_engine.structured_logger import emit_log
+
 logger = logging.getLogger("decision_engine.persistence.postgres")
 
 
@@ -306,15 +308,19 @@ class PostgresDecisionRepository:
             self._database_url = database_url or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
 
     @asynccontextmanager
-    async def _get_cursor(self) -> AsyncIterator[psycopg.AsyncCursor[Any]]:
+    async def _get_cursor(self, request_id: Optional[str] = None) -> AsyncIterator[psycopg.AsyncCursor[Any]]:
         """Yield an async cursor configured with dict_row factory."""
         if self._pool is not None:
             async with self._pool.connection() as conn:
+                if request_id:
+                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
                 async with conn.cursor(row_factory=dict_row) as cur:
                     yield cur
                 if not conn.autocommit:
                     await conn.commit()
         elif self._connection is not None:
+            if request_id:
+                emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
             async with self._connection.cursor(row_factory=dict_row) as cur:
                 yield cur
             if not getattr(self._connection, "autocommit", False):
@@ -323,6 +329,8 @@ class PostgresDecisionRepository:
             async with await psycopg.AsyncConnection.connect(
                 self._database_url, row_factory=dict_row
             ) as conn:
+                if request_id:
+                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
                 async with conn.cursor(row_factory=dict_row) as cur:
                     yield cur
                 if not conn.autocommit:
@@ -333,7 +341,7 @@ class PostgresDecisionRepository:
             )
 
     @asynccontextmanager
-    async def _get_connection(self) -> AsyncIterator[psycopg.AsyncConnection[Any]]:
+    async def _get_connection(self, request_id: Optional[str] = None) -> AsyncIterator[psycopg.AsyncConnection[Any]]:
         """
         Yield a raw async psycopg connection (without auto-cursor).
         Used by atomic operations that manage their own transaction boundary
@@ -341,18 +349,26 @@ class PostgresDecisionRepository:
         """
         if self._pool is not None:
             async with self._pool.connection() as conn:
+                if request_id:
+                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
                 yield conn
         elif self._connection is not None:
+            if request_id:
+                emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
             yield self._connection
         elif self._database_url is not None:
             async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                if request_id:
+                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
                 yield conn
         else:
             raise ValueError(
                 "Neither an active AsyncConnectionPool, AsyncConnection, nor valid database_url is available."
             )
 
-    async def get_current_decision(self, payment_id: str) -> dict[str, Any] | None:
+    async def get_current_decision(
+        self, payment_id: str, request_id: Optional[str] = None
+    ) -> dict[str, Any] | None:
         """
         Retrieve the latest decision audit record for payment_id.
         Returns a Python dictionary with native JSONB dicts, or None if not found.
@@ -379,7 +395,7 @@ class PostgresDecisionRepository:
         FROM decision_audit
         WHERE payment_id = %(payment_id)s;
         """
-        async with self._get_cursor() as cur:
+        async with self._get_cursor(request_id=request_id) as cur:
             await cur.execute(query, {"payment_id": payment_id})
             row = await cur.fetchone()
             return dict(row) if row is not None else None
@@ -478,8 +494,20 @@ class PostgresDecisionRepository:
             state_fingerprint = EXCLUDED.state_fingerprint;
         """
 
-        async with self._get_cursor() as cur:
-            await cur.execute(query, params)
+        request_id = kwargs.get("request_id")
+        try:
+            async with self._get_cursor(request_id=request_id) as cur:
+                await cur.execute(query, params)
+        except Exception as exc:
+            if request_id:
+                emit_log(
+                    logger,
+                    logging.ERROR,
+                    "db_persistence_failed",
+                    request_id,
+                    error_type=type(exc).__name__,
+                )
+            raise
 
     async def append_decision_event(self, **kwargs: Any) -> None:
         """
@@ -491,11 +519,12 @@ class PostgresDecisionRepository:
 
         decision_id = kwargs.get("decision_id") or str(uuid.uuid4())
         evaluated_at = kwargs.get("evaluated_at") or datetime.datetime.now(datetime.timezone.utc)
+        request_id = kwargs.get("request_id")
 
         params = {
             "decision_id": decision_id,
             "payment_id": payment_id,
-            "request_id": kwargs.get("request_id"),
+            "request_id": request_id,
             "evaluated_at": evaluated_at,
             "decision_source": kwargs.get("decision_source"),
             "final_action": kwargs.get("final_action", "WAIT"),
@@ -534,10 +563,23 @@ class PostgresDecisionRepository:
         );
         """
 
-        async with self._get_cursor() as cur:
-            await cur.execute(query, params)
+        try:
+            async with self._get_cursor(request_id=request_id) as cur:
+                await cur.execute(query, params)
+        except Exception as exc:
+            if request_id:
+                emit_log(
+                    logger,
+                    logging.ERROR,
+                    "db_persistence_failed",
+                    request_id,
+                    error_type=type(exc).__name__,
+                )
+            raise
 
-    async def get_events(self, payment_id: str) -> list[dict[str, Any]]:
+    async def get_events(
+        self, payment_id: str, request_id: Optional[str] = None
+    ) -> list[dict[str, Any]]:
         """
         Retrieve all audit events for payment_id ordered chronologically by evaluated_at ASC.
         """
@@ -558,7 +600,7 @@ class PostgresDecisionRepository:
         WHERE payment_id = %(payment_id)s
         ORDER BY evaluated_at ASC;
         """
-        async with self._get_cursor() as cur:
+        async with self._get_cursor(request_id=request_id) as cur:
             await cur.execute(query, {"payment_id": payment_id})
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
@@ -597,6 +639,7 @@ class PostgresDecisionRepository:
         # Callers may supply it explicitly (useful in failure-injection tests).
         event_decision_id = kwargs.get("event_decision_id") or str(uuid.uuid4())
         evaluated_at = kwargs.get("evaluated_at") or datetime.datetime.now(datetime.timezone.utc)
+        request_id = kwargs.get("request_id")
 
         raw_probs = kwargs.get("raw_arm_probabilities")
         raw_net = kwargs.get("raw_arm_net_values")
@@ -606,7 +649,7 @@ class PostgresDecisionRepository:
         decision_params = {
             "payment_id": payment_id,
             "decision_id": decision_id,
-            "request_id": kwargs.get("request_id"),
+            "request_id": request_id,
             "raw_arm_probabilities": probs_val,
             "raw_arm_net_values": net_val,
             "llm_proposed_decision": kwargs.get("llm_proposed_decision"),
@@ -626,7 +669,7 @@ class PostgresDecisionRepository:
         event_params = {
             "decision_id": event_decision_id,
             "payment_id": payment_id,
-            "request_id": kwargs.get("request_id"),
+            "request_id": request_id,
             "evaluated_at": evaluated_at,
             "decision_source": kwargs.get("decision_source"),
             "final_action": kwargs.get("final_action", "WAIT"),
@@ -685,14 +728,40 @@ class PostgresDecisionRepository:
         );
         """
 
-        async with self._get_connection() as conn:
-            async with conn.transaction():
-                # Write 1 of 2: upsert current decision into decision_audit
-                async with conn.cursor() as cur:
-                    await cur.execute(upsert_decision_sql, decision_params)
+        try:
+            async with self._get_connection(request_id=request_id) as conn:
+                try:
+                    async with conn.transaction():
+                        if request_id:
+                            emit_log(logger, logging.INFO, "db_transaction_started", request_id)
+                        # Write 1 of 2: upsert current decision into decision_audit
+                        async with conn.cursor() as cur:
+                            await cur.execute(upsert_decision_sql, decision_params)
 
-                # Write 2 of 2: append audit event into decision_audit_events
-                # If this raises, psycopg rolls back the entire transaction,
-                # including the decision_audit row written above.
-                async with conn.cursor() as cur:
-                    await cur.execute(insert_event_sql, event_params)
+                        # Write 2 of 2: append audit event into decision_audit_events
+                        # If this raises, psycopg rolls back the entire transaction,
+                        # including the decision_audit row written above.
+                        async with conn.cursor() as cur:
+                            await cur.execute(insert_event_sql, event_params)
+                    if request_id:
+                        emit_log(logger, logging.INFO, "db_transaction_committed", request_id)
+                except Exception as exc:
+                    if request_id:
+                        emit_log(
+                            logger,
+                            logging.ERROR,
+                            "db_transaction_rolled_back",
+                            request_id,
+                            error_type=type(exc).__name__,
+                        )
+                    raise
+        except Exception as exc:
+            if request_id:
+                emit_log(
+                    logger,
+                    logging.ERROR,
+                    "db_persistence_failed",
+                    request_id,
+                    error_type=type(exc).__name__,
+                )
+            raise

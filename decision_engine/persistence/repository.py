@@ -24,7 +24,7 @@ class DecisionRepository(Protocol):
     """
 
     async def get_current_decision(
-        self, payment_id: str
+        self, payment_id: str, request_id: Optional[str] = None
     ) -> dict[str, Any] | None:
         """
         Retrieve the latest decision audit record for payment_id.
@@ -93,7 +93,7 @@ class DecisionRepository(Protocol):
         ...
 
     async def get_events(
-        self, payment_id: str
+        self, payment_id: str, request_id: Optional[str] = None
     ) -> list[dict[str, Any]]:
         """
         Retrieve all immutable audit events for payment_id ordered chronologically

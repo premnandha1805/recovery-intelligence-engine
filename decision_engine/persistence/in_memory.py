@@ -24,7 +24,9 @@ class InMemoryDecisionRepository:
         self._decisions: dict[str, dict[str, Any]] = {}
         self._events: dict[str, list[dict[str, Any]]] = {}
 
-    async def get_current_decision(self, payment_id: str) -> dict[str, Any] | None:
+    async def get_current_decision(
+        self, payment_id: str, request_id: Optional[str] = None
+    ) -> dict[str, Any] | None:
         """Retrieve latest decision audit record for payment_id, or None if absent."""
         record = self._decisions.get(payment_id)
         return dict(record) if record is not None else None
@@ -53,7 +55,9 @@ class InMemoryDecisionRepository:
         event_list = self._events.setdefault(payment_id, [])
         event_list.append(dict(kwargs))
 
-    async def get_events(self, payment_id: str) -> list[dict[str, Any]]:
+    async def get_events(
+        self, payment_id: str, request_id: Optional[str] = None
+    ) -> list[dict[str, Any]]:
         """
         Retrieve all audit events for payment_id, sorted chronologically by evaluated_at ASC.
         Returns [] if no events are recorded.

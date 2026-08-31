@@ -62,7 +62,9 @@ class SqliteDecisionRepository:
     def __init__(self, db: aiosqlite.Connection) -> None:
         self.db = db
 
-    async def get_current_decision(self, payment_id: str) -> dict[str, Any] | None:
+    async def get_current_decision(
+        self, payment_id: str, request_id: Optional[str] = None
+    ) -> dict[str, Any] | None:
         """
         Retrieve latest decision audit record for payment_id from SQLite.
         """
@@ -178,7 +180,9 @@ class SqliteDecisionRepository:
         )
         await self.db.commit()
 
-    async def get_events(self, payment_id: str) -> list[dict[str, Any]]:
+    async def get_events(
+        self, payment_id: str, request_id: Optional[str] = None
+    ) -> list[dict[str, Any]]:
         """
         Retrieve all audit events for payment_id ordered chronologically.
         """

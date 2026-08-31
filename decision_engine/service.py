@@ -417,12 +417,20 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
 
         # a. Check repository cache if force_recompute is False and state fingerprint matches
         if not req.force_recompute and current_fingerprint is not None and repository is not None:
-            persisted = await repository.get_current_decision(payment_id)
+            persisted = await repository.get_current_decision(payment_id, request_id=request_id)
             if (
                 persisted is not None
                 and persisted.get("state_fingerprint") is not None
                 and persisted.get("state_fingerprint") == current_fingerprint
             ):
+                # Structured DB observability: db_cache_hit
+                emit_log(
+                    logger,
+                    logging.INFO,
+                    "db_cache_hit",
+                    request_id,
+                    payment_id=payment_id,
+                )
                 # Event D: cache_hit
                 emit_log(
                     logger,
@@ -475,6 +483,14 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 return cached_dto
 
         # b. Cache miss or force_recompute=True: invoke canonical graph
+        # Structured DB observability: db_cache_miss
+        emit_log(
+            logger,
+            logging.INFO,
+            "db_cache_miss",
+            request_id,
+            payment_id=payment_id,
+        )
         # Event E: cache_miss
         emit_log(
             logger,
