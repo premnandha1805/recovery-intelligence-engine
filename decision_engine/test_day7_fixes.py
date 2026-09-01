@@ -118,6 +118,7 @@ async def init_isolated_service(tmp_path: pathlib.Path, mock_llm: Any = None):
     app.state.llm_semaphore = asyncio.Semaphore(5)
     app.state.payment_locks = {}
     app.state.locks_mutex = asyncio.Lock()
+    app.state.migrations_applied = True
     app.state.dataset = None  # Use canonical cache unless overridden
 
     return app, db, db_path, llm
@@ -689,6 +690,7 @@ async def init_isolated_postgres_service(mock_llm: Any = None):
     app.state.llm_semaphore = asyncio.Semaphore(5)
     app.state.payment_locks = {}
     app.state.locks_mutex = asyncio.Lock()
+    app.state.migrations_applied = True
     app.state.dataset = None
 
     return app, repo, pool, llm

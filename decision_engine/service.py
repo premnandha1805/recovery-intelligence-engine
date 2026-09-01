@@ -54,6 +54,7 @@ from decision_engine.persistence import (
     close_postgres_pool,
     check_pool_health,
 )
+from decision_engine.persistence.migrate import run_migrations, MigrationError
 from decision_engine.persistence.sqlite import open_sqlite_repository
 
 from decision_engine.state import RecoveryState
@@ -63,6 +64,11 @@ from decision_engine.audit import (
     compute_state_fingerprint,
 )
 from decision_engine.context_node import get_payment_state, _get_dataset
+from decision_engine.config import (
+    DecisionEngineConfig,
+    load_and_validate_config,
+    ConfigValidationError,
+)
 from ml.decision import CausalUpliftPolicy
 from models.schemas import Action
 from decision_engine.structured_logger import emit_log
@@ -151,29 +157,58 @@ async def get_payment_lock(app_instance: FastAPI, payment_id: str) -> asyncio.Lo
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    # 0. Persistence backend initialization (Day 8G Production Cutover)
-    # Default is 'postgres'. When PERSISTENCE_BACKEND=sqlite, Day 7 SQLite path is used.
-    # When PERSISTENCE_BACKEND=postgres, pool creation is fail-fast with zero SQLite fallback.
-    persistence_backend = os.getenv("PERSISTENCE_BACKEND", "postgres").lower()
-    app_instance.state.persistence_backend = persistence_backend
+    # 0. Startup Configuration Validation (Day 9E Centralized Contract)
+    # Validates PERSISTENCE_BACKEND, DATABASE_URL, pool settings, Azure Foundry credentials
+    # at startup before serving traffic. Fails fast with secret redaction.
+    config: DecisionEngineConfig = load_and_validate_config()
+    app_instance.state.config = config
+    app_instance.state.persistence_backend = config.persistence_backend
     app_instance.state.db_pool = None
     app_instance.state.db = None
     app_instance.state.repository = None
 
-    if persistence_backend == "postgres":
+    # Day 9F: Track migration readiness for health gating
+    app_instance.state.migrations_applied = False
+
+    if config.persistence_backend == "postgres":
         logger.info("Initializing PostgreSQL AsyncConnectionPool (PERSISTENCE_BACKEND=postgres)...")
-        app_instance.state.db_pool = await create_postgres_pool()
+        app_instance.state.db_pool = await create_postgres_pool(
+            database_url=config.database_url,
+            min_size=config.db_pool_min,
+            max_size=config.db_pool_max,
+            timeout_ms=config.db_connect_timeout_ms,
+        )
         app_instance.state.repository = PostgresDecisionRepository(pool=app_instance.state.db_pool)
-    elif persistence_backend == "sqlite":
+
+        # Day 9F: Run forward-only migrations BEFORE accepting traffic.
+        # Synchronous psycopg connection — migrations are DDL and must complete
+        # before the async pool serves application queries.
+        logger.info("Running database migrations...")
+        try:
+            applied = run_migrations(database_url=config.database_url)
+            if applied:
+                logger.info(f"Applied {len(applied)} migration(s): {applied}")
+            else:
+                logger.info("No new migrations to apply. Schema is up to date.")
+            app_instance.state.migrations_applied = True
+        except MigrationError as exc:
+            logger.error(f"Migration failed: {exc}. Service will not become ready.")
+            # Do NOT set migrations_applied = True; health will report not-ready.
+        except Exception as exc:
+            logger.error(f"Unexpected migration error: {type(exc).__name__}. Service will not become ready.")
+
+    elif config.persistence_backend == "sqlite":
         # SQLite persistence backend (Day 7 default / backward compatibility)
         db_path = str(DEFAULT_AUDIT_DB_PATH)
         logger.info(f"Opening SQLite repository at {db_path}...")
         db, repo = await open_sqlite_repository(db_path)
         app_instance.state.db = db
         app_instance.state.repository = repo
+        # SQLite migrations are handled inline by aiosqlite CREATE TABLE IF NOT EXISTS
+        app_instance.state.migrations_applied = True
     else:
-        raise ValueError(
-            f"Unsupported PERSISTENCE_BACKEND: {persistence_backend!r}. Must be 'postgres' or 'sqlite'."
+        raise ConfigValidationError(
+            f"Unsupported PERSISTENCE_BACKEND: {config.persistence_backend!r}. Must be 'postgres' or 'sqlite'."
         )
 
     # 1. Initialize CausalUpliftPolicy exactly once
@@ -222,6 +257,15 @@ async def lifespan(app_instance: FastAPI):
         await close_postgres_pool(app_instance.state.db_pool)
 
     app_instance.state.repository = None
+
+    emit_log(
+        logger,
+        logging.INFO,
+        event="service_shutdown",
+        request_id="system-shutdown",
+        persistence_backend=getattr(app_instance.state, "persistence_backend", "unknown"),
+        status="clean_shutdown",
+    )
 
 
 # ── FastAPI App Instance ─────────────────────────────────────────────────────
@@ -296,8 +340,9 @@ async def health_check():
         or getattr(app.state, "db", None) is not None
         or getattr(app.state, "db_pool", None) is not None
     )
+    migrations_ok = getattr(app.state, "migrations_applied", False)
 
-    engine_ok = policy_ready and graph_ready and repo_ready
+    engine_ok = policy_ready and graph_ready and repo_ready and migrations_ok
 
     persistence_backend = getattr(app.state, "persistence_backend", "sqlite")
 

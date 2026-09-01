@@ -389,3 +389,95 @@ def test_data_roundtrip(clean_test_db: str) -> None:
             assert ev_row is not None
             assert ev_row[7] == "RETRY"  # llm_proposed_decision
             assert ev_row[8] is False  # guardrail_overridden
+
+
+# ---------------------------------------------------------------------------
+# Day 9F: Rollback Test (Requires TEST_DATABASE_URL)
+# ---------------------------------------------------------------------------
+
+@integration_mark
+def test_failed_migration_rolls_back_completely(clean_test_db: str, tmp_path: pathlib.Path) -> None:
+    """
+    Day 9F Required Rollback Test:
+    A deliberately failing migration must be fully rolled back.
+    Specifically:
+    1. day9f_partial_test table must NOT exist after the failed run.
+    2. The failing migration ID must NOT appear in schema_migrations.
+    3. Previously applied migrations remain intact.
+
+    Uses a TEMPORARY migration directory — does NOT modify production migrations.
+    """
+    from decision_engine.persistence.migrate import MigrationError
+
+    db_url = clean_test_db
+
+    # Step 1: Apply production migrations first (clean baseline)
+    applied_prod = run_migrations(database_url=db_url)
+    assert len(applied_prod) == 2  # 001 + 002
+
+    # Step 2: Create temporary migration directory with:
+    #   - copies of production migrations (already applied, will be skipped)
+    #   - a deliberately failing migration 003
+    import shutil
+    prod_migrations = pathlib.Path(__file__).resolve().parent / "migrations"
+    for sql_file in prod_migrations.glob("*.sql"):
+        shutil.copy(sql_file, tmp_path / sql_file.name)
+
+    # Create deliberately failing migration: valid DDL followed by invalid SQL
+    failing_migration = tmp_path / "003_day9f_partial_test.sql"
+    failing_migration.write_text(
+        "CREATE TABLE day9f_partial_test (id SERIAL PRIMARY KEY, label TEXT NOT NULL);\n"
+        "INVALID SQL THAT WILL CAUSE A SYNTAX ERROR;\n",
+        encoding="utf-8",
+    )
+
+    # Step 3: Run migrations with the temporary directory — must fail on 003
+    with pytest.raises(MigrationError, match="003_day9f_partial_test.sql"):
+        run_migrations(database_url=db_url, migrations_dir=tmp_path)
+
+    # Step 4: Verify rollback guarantees
+    with psycopg.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            # A. day9f_partial_test table must NOT exist
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name = 'day9f_partial_test'
+                );
+                """
+            )
+            table_exists = cur.fetchone()[0]
+            assert table_exists is False, (
+                "day9f_partial_test table must NOT exist after failed migration rollback"
+            )
+
+            # B. Migration ID must NOT appear in schema_migrations
+            cur.execute(
+                "SELECT id FROM schema_migrations WHERE id = %s;",
+                ("003_day9f_partial_test.sql",),
+            )
+            assert cur.fetchone() is None, (
+                "Failed migration ID must NOT be recorded in schema_migrations"
+            )
+
+            # C. Previously applied migrations remain intact
+            cur.execute("SELECT id FROM schema_migrations ORDER BY id ASC;")
+            remaining = [row[0] for row in cur.fetchall()]
+            assert remaining == [
+                "001_initial_decision_tables.sql",
+                "002_add_indexes.sql",
+            ], "Previously applied migrations must remain intact after rollback"
+
+            # D. Original production tables still exist
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name = 'decision_audit'
+                );
+                """
+            )
+            assert cur.fetchone()[0] is True, "decision_audit must still exist"

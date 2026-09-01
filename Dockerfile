@@ -48,5 +48,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-# Run FastAPI decision engine service as a single worker process
-CMD ["uvicorn", "decision_engine.service:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Run FastAPI decision engine service as a single worker process with 10s graceful shutdown timeout
+CMD ["uvicorn", "decision_engine.service:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--timeout-graceful-shutdown", "10"]

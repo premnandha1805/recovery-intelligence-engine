@@ -45,15 +45,14 @@ def sanitize_database_url(url: str) -> str:
 def validate_database_url(url: str | None) -> str:
     """
     Validate that database URL is present, non-empty, and uses a valid postgres scheme.
-    Raises ValueError if invalid.
+    Raises ValueError if invalid. Redacts credentials and never outputs raw URL.
     """
     if not url or not isinstance(url, str) or not url.strip():
         raise ValueError("DATABASE_URL is required but was not provided.")
     clean_url = url.strip()
     if not (clean_url.startswith("postgresql://") or clean_url.startswith("postgres://")):
-        safe_url = sanitize_database_url(clean_url)
         raise ValueError(
-            f"Invalid DATABASE_URL scheme in '{safe_url}'. Must start with 'postgresql://' or 'postgres://'."
+            "Invalid DATABASE_URL scheme. Must start with 'postgresql://' or 'postgres://'."
         )
     return clean_url
 

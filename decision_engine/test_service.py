@@ -131,6 +131,7 @@ async def init_test_app(tmp_path: pathlib.Path):
     app.state.payment_locks = {}
     app.state.locks_mutex = asyncio.Lock()
     app.state.mock_llm = mock_llm
+    app.state.migrations_applied = True
 
     return app, db, mock_llm
 

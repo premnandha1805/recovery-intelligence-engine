@@ -37,3 +37,4 @@ Thumbs.db
 # SQLite local audit database
 decision_engine/*.db
 
+.env.prod

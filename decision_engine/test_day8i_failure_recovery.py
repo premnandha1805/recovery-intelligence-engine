@@ -132,6 +132,7 @@ async def init_failure_test_app():
     app.state.llm_semaphore = asyncio.Semaphore(10)
     app.state.payment_locks = {}
     app.state.locks_mutex = asyncio.Lock()
+    app.state.migrations_applied = True
     app.state.dataset = _get_dataset().copy()
 
     return app, repo, pool

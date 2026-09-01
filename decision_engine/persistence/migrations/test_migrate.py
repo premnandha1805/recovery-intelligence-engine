@@ -13,4 +13,5 @@ from decision_engine.persistence.test_migrate import (  # noqa: F401
     test_schema_parity_and_forbidden_column_names,
     test_postgresql_types_and_indexes,
     test_data_roundtrip,
+    test_failed_migration_rolls_back_completely,
 )
