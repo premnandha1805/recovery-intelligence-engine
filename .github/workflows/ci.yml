@@ -1,0 +1,121 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Test & Build CI
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: recovery_test
+          POSTGRES_USER: recovery_test
+          POSTGRES_PASSWORD: recovery_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://recovery_test:recovery_test_password@localhost:5432/recovery_test
+      DATABASE_URL: postgresql://recovery_test:recovery_test_password@localhost:5432/recovery_test
+      PERSISTENCE_BACKEND: postgres
+      DB_POOL_MIN: "2"
+      DB_POOL_MAX: "5"
+      DB_CONNECT_TIMEOUT_MS: "3000"
+      AZURE_OPENAI_API_KEY: ci-test-mock-key
+      AZURE_AI_PROJECT_ENDPOINT: https://ci-mock-foundry.openai.azure.com
+      CI: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Python Setup & Tests ────────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Python regression & integration tests
+        run: |
+          python -m pytest -v
+
+      # ── NestJS Setup, Tests & Build ─────────────────────────────────────────
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install NestJS dependencies
+        working-directory: backend
+        run: |
+          npm ci
+
+      - name: Run NestJS tests
+        working-directory: backend
+        run: |
+          npm test
+
+      - name: Build NestJS application
+        working-directory: backend
+        run: |
+          npm run build
+
+      # ── Frozen Code Verification ────────────────────────────────────────────
+      - name: Verify frozen code integrity
+        run: |
+          echo "Checking for unexpected modifications to frozen code..."
+          FROZEN_DIFF=$(git diff -- policy ml evaluation/evaluator.py evaluation/report.py)
+          if [ -n "$FROZEN_DIFF" ]; then
+            echo "::error::Frozen code modified! Diff:"
+            echo "$FROZEN_DIFF"
+            exit 1
+          fi
+          echo "Frozen code is clean."
+
+      # ── Docker Image Builds (Test & Validation Only — No Push) ──────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Python Decision Engine Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: recovery-intelligence-engine:ci
+          load: true
+
+      - name: Build NestJS API Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: backend/Dockerfile
+          push: false
+          tags: recovery-intelligence-api:ci
+          load: true
