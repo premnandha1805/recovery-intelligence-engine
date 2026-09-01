@@ -244,6 +244,15 @@ async def lifespan(app_instance: FastAPI):
     else:
         app_instance.state.graph = None
 
+    emit_log(
+        logger,
+        logging.INFO,
+        event="service_startup",
+        request_id="system-startup",
+        persistence_backend=config.persistence_backend,
+        status="ready",
+    )
+
     yield
 
     # 6. On shutdown (lifespan exit), close database connections cleanly
@@ -333,6 +342,7 @@ async def health_check():
     PostgreSQL mode: probes pool via SELECT 1 with ~2s timeout.
     SQLite mode: reports decision_engine readiness only (no database dependency).
     """
+    health_start = time.monotonic()
     policy_ready = getattr(app.state, "policy", None) is not None
     graph_ready = getattr(app.state, "graph", None) is not None
     repo_ready = (
@@ -353,13 +363,24 @@ async def health_check():
         # SQLite mode: no PostgreSQL dependency to probe
         db_status = "ok"
 
+    duration_ms = round((time.monotonic() - health_start) * 1000, 2)
+    overall_status = "ok" if db_status == "ok" else "degraded"
+
+    emit_log(
+        logger,
+        logging.INFO,
+        event="health_check",
+        request_id="system-health",
+        status=overall_status,
+        database=db_status,
+        duration_ms=duration_ms,
+    )
+
     if not engine_ok:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Engine components not fully initialized",
         )
-
-    overall_status = "ok" if db_status == "ok" else "degraded"
 
     return {
         "status": overall_status,
@@ -404,7 +425,16 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
     # Return X-Request-Id in response header
     response.headers["x-request-id"] = request_id
 
-    # Event A: evaluate_received
+    # Event: request_received & evaluate_received
+    emit_log(
+        logger,
+        logging.INFO,
+        "request_received",
+        request_id,
+        payment_id=payment_id,
+        force_recompute=req.force_recompute,
+        request_start=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    )
     emit_log(
         logger,
         logging.INFO,
@@ -461,6 +491,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 repository = SqliteDecisionRepository(active_db)
 
         # a. Check repository cache if force_recompute is False and state fingerprint matches
+        cache_lookup_start = time.monotonic()
         if not req.force_recompute and current_fingerprint is not None and repository is not None:
             persisted = await repository.get_current_decision(payment_id, request_id=request_id)
             if (
@@ -468,13 +499,15 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 and persisted.get("state_fingerprint") is not None
                 and persisted.get("state_fingerprint") == current_fingerprint
             ):
-                # Structured DB observability: db_cache_hit
+                cache_duration_ms = round((time.monotonic() - cache_lookup_start) * 1000, 2)
+                # Structured DB observability: db_cache_hit & cache_hit
                 emit_log(
                     logger,
                     logging.INFO,
                     "db_cache_hit",
                     request_id,
                     payment_id=payment_id,
+                    duration_ms=cache_duration_ms,
                 )
                 # Event D: cache_hit
                 emit_log(
@@ -483,6 +516,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                     "cache_hit",
                     request_id,
                     payment_id=payment_id,
+                    duration_ms=cache_duration_ms,
                 )
                 net_vals = persisted.get("raw_arm_net_values")
                 if isinstance(net_vals, str):
@@ -515,7 +549,17 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                     "request_id": request_id,
                 }
                 duration_ms = round((time.monotonic() - request_start) * 1000, 2)
-                # Event I: evaluate_completed on cache-hit
+                # Event: decision_completed & evaluate_completed on cache-hit
+                emit_log(
+                    logger,
+                    logging.INFO,
+                    "decision_completed",
+                    request_id,
+                    payment_id=payment_id,
+                    duration_ms=duration_ms,
+                    final_action=cached_dto["final_action"],
+                    decision_source="cache",
+                )
                 emit_log(
                     logger,
                     logging.INFO,
@@ -528,13 +572,15 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                 return cached_dto
 
         # b. Cache miss or force_recompute=True: invoke canonical graph
-        # Structured DB observability: db_cache_miss
+        cache_miss_duration_ms = round((time.monotonic() - cache_lookup_start) * 1000, 2)
+        # Structured DB observability: db_cache_miss & cache_miss
         emit_log(
             logger,
             logging.INFO,
             "db_cache_miss",
             request_id,
             payment_id=payment_id,
+            duration_ms=cache_miss_duration_ms,
         )
         # Event E: cache_miss
         emit_log(
@@ -543,6 +589,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             "cache_miss",
             request_id,
             payment_id=payment_id,
+            duration_ms=cache_miss_duration_ms,
         )
         
         # State contains strictly business domain fields (Issue 1)
@@ -634,8 +681,18 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             final_action=dto.get("final_action", "WAIT"),
         )
 
-        # Event I: evaluate_completed
+        # Event: decision_completed & evaluate_completed
         duration_ms = round((time.monotonic() - request_start) * 1000, 2)
+        emit_log(
+            logger,
+            logging.INFO,
+            "decision_completed",
+            request_id,
+            payment_id=payment_id,
+            duration_ms=duration_ms,
+            final_action=dto.get("final_action", "WAIT"),
+            decision_source=dto.get("decision_source", "model"),
+        )
         emit_log(
             logger,
             logging.INFO,

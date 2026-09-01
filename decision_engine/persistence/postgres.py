@@ -309,17 +309,20 @@ class PostgresDecisionRepository:
     @asynccontextmanager
     async def _get_cursor(self, request_id: Optional[str] = None) -> AsyncIterator[psycopg.AsyncCursor[Any]]:
         """Yield an async cursor configured with dict_row factory."""
+        t0 = time.monotonic()
         if self._pool is not None:
             async with self._pool.connection() as conn:
+                duration_ms = round((time.monotonic() - t0) * 1000, 2)
                 if request_id:
-                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
+                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id, duration_ms=duration_ms)
                 async with conn.cursor(row_factory=dict_row) as cur:
                     yield cur
                 if not conn.autocommit:
                     await conn.commit()
         elif self._connection is not None:
+            duration_ms = round((time.monotonic() - t0) * 1000, 2)
             if request_id:
-                emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
+                emit_log(logger, logging.INFO, "db_connection_acquired", request_id, duration_ms=duration_ms)
             async with self._connection.cursor(row_factory=dict_row) as cur:
                 yield cur
             if not getattr(self._connection, "autocommit", False):
@@ -328,8 +331,9 @@ class PostgresDecisionRepository:
             async with await psycopg.AsyncConnection.connect(
                 self._database_url, row_factory=dict_row
             ) as conn:
+                duration_ms = round((time.monotonic() - t0) * 1000, 2)
                 if request_id:
-                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
+                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id, duration_ms=duration_ms)
                 async with conn.cursor(row_factory=dict_row) as cur:
                     yield cur
                 if not conn.autocommit:
@@ -346,19 +350,23 @@ class PostgresDecisionRepository:
         Used by atomic operations that manage their own transaction boundary
         via `async with conn.transaction()`.
         """
+        t0 = time.monotonic()
         if self._pool is not None:
             async with self._pool.connection() as conn:
+                duration_ms = round((time.monotonic() - t0) * 1000, 2)
                 if request_id:
-                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
+                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id, duration_ms=duration_ms)
                 yield conn
         elif self._connection is not None:
+            duration_ms = round((time.monotonic() - t0) * 1000, 2)
             if request_id:
-                emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
+                emit_log(logger, logging.INFO, "db_connection_acquired", request_id, duration_ms=duration_ms)
             yield self._connection
         elif self._database_url is not None:
             async with await psycopg.AsyncConnection.connect(self._database_url) as conn:
+                duration_ms = round((time.monotonic() - t0) * 1000, 2)
                 if request_id:
-                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id)
+                    emit_log(logger, logging.INFO, "db_connection_acquired", request_id, duration_ms=duration_ms)
                 yield conn
         else:
             raise ValueError(
@@ -727,8 +735,10 @@ class PostgresDecisionRepository:
         );
         """
 
+        t_op_start = time.monotonic()
         try:
             async with self._get_connection(request_id=request_id) as conn:
+                t_tx_start = time.monotonic()
                 try:
                     async with conn.transaction():
                         if request_id:
@@ -742,9 +752,11 @@ class PostgresDecisionRepository:
                         # including the decision_audit row written above.
                         async with conn.cursor() as cur:
                             await cur.execute(insert_event_sql, event_params)
+                    tx_duration_ms = round((time.monotonic() - t_tx_start) * 1000, 2)
                     if request_id:
-                        emit_log(logger, logging.INFO, "db_transaction_committed", request_id)
+                        emit_log(logger, logging.INFO, "db_transaction_committed", request_id, duration_ms=tx_duration_ms)
                 except Exception as exc:
+                    tx_duration_ms = round((time.monotonic() - t_tx_start) * 1000, 2)
                     if request_id:
                         emit_log(
                             logger,
@@ -752,9 +764,11 @@ class PostgresDecisionRepository:
                             "db_transaction_rolled_back",
                             request_id,
                             error_type=type(exc).__name__,
+                            duration_ms=tx_duration_ms,
                         )
                     raise
         except Exception as exc:
+            op_duration_ms = round((time.monotonic() - t_op_start) * 1000, 2)
             if request_id:
                 emit_log(
                     logger,
@@ -762,5 +776,6 @@ class PostgresDecisionRepository:
                     "db_persistence_failed",
                     request_id,
                     error_type=type(exc).__name__,
+                    duration_ms=op_duration_ms,
                 )
             raise
