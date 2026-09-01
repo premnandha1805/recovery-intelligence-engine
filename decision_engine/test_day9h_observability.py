@@ -168,9 +168,11 @@ async def test_all_12_required_events_and_timings(caplog: pytest.LogCaptureFixtu
     """
     caplog.set_level(logging.INFO)
     app_instance, repo, pool = await init_obs_test_app()
-    pid = "pay_9h_full_001"
-    req_id_1 = "req-9h-full-miss-001"
-    req_id_2 = "req-9h-full-hit-002"
+    import uuid
+    uid = uuid.uuid4().hex[:8]
+    pid = f"pay_9h_full_{uid}"
+    req_id_1 = f"req-9h-full-miss-{uid}"
+    req_id_2 = f"req-9h-full-hit-{uid}"
     ensure_test_payment(app_instance, pid)
 
     try:

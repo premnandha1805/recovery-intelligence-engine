@@ -557,6 +557,7 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
                     request_id,
                     payment_id=payment_id,
                     duration_ms=duration_ms,
+                    lock_wait_duration_ms=lock_wait_ms,
                     final_action=cached_dto["final_action"],
                     decision_source="cache",
                 )
@@ -620,8 +621,10 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             payment_id=payment_id,
         )
 
-        # Canonical async graph execution
+        # Canonical async graph execution (timed as evaluation_duration_ms)
+        eval_start = time.monotonic()
         final_state: RecoveryState = await app.state.graph.ainvoke(initial_state, config=config)
+        evaluation_duration_ms = round((time.monotonic() - eval_start) * 1000, 2)
 
         dto = format_response_dto(
             payment_id=payment_id,
@@ -683,15 +686,29 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
 
         # Event: decision_completed & evaluate_completed
         duration_ms = round((time.monotonic() - request_start) * 1000, 2)
+        llm_duration_ms = (
+            final_state.get("llm_decision", {}).get("llm_duration_ms")
+            if isinstance(final_state.get("llm_decision"), dict)
+            else None
+        ) or final_state.get("llm_duration_ms")
+
+        decision_kwargs = {
+            "payment_id": payment_id,
+            "duration_ms": duration_ms,
+            "lock_wait_duration_ms": lock_wait_ms,
+            "evaluation_duration_ms": evaluation_duration_ms,
+            "final_action": dto.get("final_action", "WAIT"),
+            "decision_source": dto.get("decision_source", "model"),
+        }
+        if llm_duration_ms is not None:
+            decision_kwargs["llm_duration_ms"] = float(llm_duration_ms)
+
         emit_log(
             logger,
             logging.INFO,
             "decision_completed",
             request_id,
-            payment_id=payment_id,
-            duration_ms=duration_ms,
-            final_action=dto.get("final_action", "WAIT"),
-            decision_source=dto.get("decision_source", "model"),
+            **decision_kwargs,
         )
         emit_log(
             logger,

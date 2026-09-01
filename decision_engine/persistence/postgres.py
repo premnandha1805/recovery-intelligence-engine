@@ -754,7 +754,14 @@ class PostgresDecisionRepository:
                             await cur.execute(insert_event_sql, event_params)
                     tx_duration_ms = round((time.monotonic() - t_tx_start) * 1000, 2)
                     if request_id:
-                        emit_log(logger, logging.INFO, "db_transaction_committed", request_id, duration_ms=tx_duration_ms)
+                        emit_log(
+                            logger,
+                            logging.INFO,
+                            "db_transaction_committed",
+                            request_id,
+                            duration_ms=tx_duration_ms,
+                            db_write_duration_ms=tx_duration_ms,
+                        )
                 except Exception as exc:
                     tx_duration_ms = round((time.monotonic() - t_tx_start) * 1000, 2)
                     if request_id:
@@ -765,6 +772,7 @@ class PostgresDecisionRepository:
                             request_id,
                             error_type=type(exc).__name__,
                             duration_ms=tx_duration_ms,
+                            db_write_duration_ms=tx_duration_ms,
                         )
                     raise
         except Exception as exc:

@@ -440,15 +440,18 @@ async def async_reasoning_node(
                 call_remaining = None
 
             # 4. Invoke LLM asynchronously using native ainvoke (or to_thread fallback for sync test mocks)
+            t_llm_start = time.monotonic()
             if hasattr(structured_llm, "ainvoke"):
                 coro = structured_llm.ainvoke(prompt_str)
             else:
                 coro = asyncio.to_thread(structured_llm.invoke, prompt_str)
 
             if call_remaining is not None:
-                return await asyncio.wait_for(coro, timeout=call_remaining)
+                call_res = await asyncio.wait_for(coro, timeout=call_remaining)
             else:
-                return await coro
+                call_res = await coro
+            call_ms = round((time.monotonic() - t_llm_start) * 1000, 2)
+            return call_res, call_ms
         finally:
             if sem_acquired:
                 effective_semaphore.release()
@@ -456,9 +459,11 @@ async def async_reasoning_node(
     # ── Attempt 1 ─────────────────────────────────────────────────────────────
     parsed_output = None
     attempt1_error = None
+    total_llm_duration_ms = 0.0
 
     try:
-        res = await _call_llm_async(base_prompt)
+        res, call_ms = await _call_llm_async(base_prompt)
+        total_llm_duration_ms += call_ms
         if res.decision not in permitted_actions:
             attempt1_error = (
                 f"Proposed decision {res.decision!r} is not in permitted_actions {permitted_actions}"
@@ -479,10 +484,12 @@ async def async_reasoning_node(
             "risk_level": parsed_output.risk_level,
             "expected_incremental_value": expected_val,
             "decision_source": "llm",
+            "llm_duration_ms": total_llm_duration_ms,
         }
 
         return _attach_request_id({
             "llm_decision": decision_data,
+            "llm_duration_ms": total_llm_duration_ms,
             "final_action": chosen_action,
             "audit_trail": [
                 {
@@ -492,6 +499,7 @@ async def async_reasoning_node(
                     "decision": chosen_action,
                     "decision_source": "llm",
                     "expected_incremental_value": expected_val,
+                    "llm_duration_ms": total_llm_duration_ms,
                 }
             ],
         })
@@ -505,7 +513,8 @@ async def async_reasoning_node(
     )
 
     try:
-        res_retry = await _call_llm_async(correction_prompt)
+        res_retry, retry_call_ms = await _call_llm_async(correction_prompt)
+        total_llm_duration_ms += retry_call_ms
         if res_retry.decision not in permitted_actions:
             attempt2_error = (
                 f"Attempt 2 rejected: decision {res_retry.decision!r} not in {permitted_actions}"
@@ -521,10 +530,12 @@ async def async_reasoning_node(
                 "risk_level": res_retry.risk_level,
                 "expected_incremental_value": expected_val,
                 "decision_source": "llm_retry_success",
+                "llm_duration_ms": total_llm_duration_ms,
             }
 
             return _attach_request_id({
                 "llm_decision": decision_data,
+                "llm_duration_ms": total_llm_duration_ms,
                 "final_action": chosen_action,
                 "audit_trail": [
                     {
@@ -534,6 +545,7 @@ async def async_reasoning_node(
                         "decision": chosen_action,
                         "decision_source": "llm_retry_success",
                         "expected_incremental_value": expected_val,
+                        "llm_duration_ms": total_llm_duration_ms,
                     }
                 ],
             })
