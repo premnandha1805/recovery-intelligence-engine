@@ -767,5 +767,69 @@ describe('DecisionController & HealthController (DAY 7H Final Public API Regress
       // 3. NestJS makes exactly one call to the adapter (no internal cache, retry, or dedup logic)
       expect(evaluateSpy).toHaveBeenCalledTimes(1);
     });
+
+    it('Scenario 6: New payment with caller-supplied features is validated and forwarded to adapter', async () => {
+      const evaluateSpy = jest.spyOn(adapter, 'evaluate').mockResolvedValueOnce({
+        ...mockPythonDecision,
+        payment_id: 'pay_999999_a1',
+        decision_source: 'FOUNDRY_REASONING',
+      });
+
+      const validFeatures = {
+        amount: 1499.0,
+        attempt_number: 1,
+        dynamic_success_rate: 0.65,
+        cumulative_failures: 0,
+        consecutive_failed_cycles: 0,
+        notification_engagement_score: 0.8,
+        contact_response_score: 0.5,
+        payment_method: 'card',
+        failure_reason: 'insufficient_funds',
+      };
+
+      const response = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({
+          payment_id: 'pay_999999_a1',
+          features: validFeatures,
+        })
+        .expect(200);
+
+      expect(response.body.payment_id).toBe('pay_999999_a1');
+      expect(response.body.decision_source).toBe('FOUNDRY_REASONING');
+      expect(evaluateSpy).toHaveBeenCalledWith(
+        'pay_999999_a1',
+        expect.any(String),
+        false,
+        expect.objectContaining({
+          amount: 1499.0,
+          payment_method: 'card',
+          failure_reason: 'insufficient_funds',
+        }),
+      );
+    });
+
+    it('Scenario 7: Reject new payment request when features contains forbidden or undeclared fields', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/decisions')
+        .send({
+          payment_id: 'pay_999999_a1',
+          features: {
+            amount: 1499.0,
+            attempt_number: 1,
+            dynamic_success_rate: 0.65,
+            cumulative_failures: 0,
+            consecutive_failed_cycles: 0,
+            notification_engagement_score: 0.8,
+            contact_response_score: 0.5,
+            payment_method: 'card',
+            failure_reason: 'insufficient_funds',
+            p_success_retry: 0.85, // Forbidden simulator field
+          },
+        })
+        .expect(400);
+
+      expect(response.body.error.code).toBe('VALIDATION_ERROR');
+    });
   });
 });

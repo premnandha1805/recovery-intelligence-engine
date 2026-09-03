@@ -62,13 +62,21 @@ export class DecisionService {
       // Event B: decision_engine_request_started
       this.structuredLogger.log('decision_engine_request_started', requestId, {
         payment_id: dto.payment_id,
+        has_features: Boolean(dto.features),
       });
 
-      pythonResult = await this.decisionEngineAdapter.evaluate(
-        dto.payment_id,
-        requestId,
-        forceRecompute,
-      );
+      pythonResult = dto.features
+        ? await this.decisionEngineAdapter.evaluate(
+            dto.payment_id,
+            requestId,
+            forceRecompute,
+            dto.features,
+          )
+        : await this.decisionEngineAdapter.evaluate(
+            dto.payment_id,
+            requestId,
+            forceRecompute,
+          );
 
       // Event C: decision_engine_request_completed
       this.structuredLogger.log('decision_engine_request_completed', requestId, {

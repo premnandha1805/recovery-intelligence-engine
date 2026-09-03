@@ -64,18 +64,43 @@ from decision_engine.audit import (
     compute_state_fingerprint,
 )
 from decision_engine.context_node import get_payment_state, _get_dataset
+import math
+
 from decision_engine.config import (
     DecisionEngineConfig,
     load_and_validate_config,
     ConfigValidationError,
 )
 from ml.decision import CausalUpliftPolicy
-from models.schemas import Action
+from ml.dataset import OBSERVABLE_FEATURES, FORBIDDEN_PREFIXES
+from models.schemas import Action, PaymentMethod, FailureReason
 from decision_engine.structured_logger import emit_log
 
 # Configure structured logging
 logger = logging.getLogger("decision_engine.service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+# ── Canonical Inference Vocabularies (Sourced from Repository Constants) ─────
+VALID_PAYMENT_METHODS: frozenset[str] = frozenset(m.value for m in PaymentMethod)
+VALID_FAILURE_REASONS: frozenset[str] = frozenset(r.value for r in FailureReason) | {
+    "network_error",
+    "insufficient_funds",
+    "temporary_bank_issue",
+    "bank_decline",
+    "expired_card",
+    "authentication_failure",
+}
+ALLOWED_FEATURE_KEYS: frozenset[str] = frozenset(OBSERVABLE_FEATURES) | {
+    "status",
+    "consecutive_failures",
+    "retry_count_current_cycle",
+    "retry_count",
+    "lifetime_escalations",
+    "interventions_last_7_days",
+    "interventions_7d",
+    "customer_id",
+    "days_active",
+}
 
 
 # ── Request / Response Schemas ───────────────────────────────────────────────
@@ -84,6 +109,217 @@ class EvaluateRequest(BaseModel):
     payment_id: str
     request_id: Optional[str] = None
     force_recompute: bool = False
+    features: Optional[dict[str, Any]] = None
+
+
+# ── Feature Validation & State Construction ──────────────────────────────────
+
+def validate_and_parse_features(
+    payment_id: str,
+    raw_features: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """
+    Strict validation and partition construction for caller-supplied payment features.
+
+    Validates:
+    - Zero forbidden simulator/counterfactual fields (ml.dataset.FORBIDDEN_PREFIXES).
+    - Presence of all 9 required observable model features (ml.dataset.OBSERVABLE_FEATURES).
+    - Rejection of undeclared/extra fields.
+    - Type and range safety (rejection of NaN, Infinity, negative counts, invalid categoricals).
+    - String length safety.
+
+    Applies documented conservative cold-start defaults for operational context:
+    - status: "failed" (conservative default for recovery intelligence evaluation)
+    - lifetime_escalations: 0 (cold start: no prior human escalations on record)
+    - interventions_last_7_days: 0 (cold start: no prior interventions on record)
+
+    Enforces authoritative operational bounds against tampering:
+    - consecutive_failures >= consecutive_failed_cycles
+    - retry_count_current_cycle >= max(0, attempt_number - 1)
+
+    Returns
+    -------
+    tuple of (observable_features, payment_context, customer_history)
+    """
+    if not isinstance(raw_features, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="features must be a dictionary/object",
+        )
+
+    # 1. Leakage Firewall: Reject forbidden simulator/counterfactual fields
+    for k in raw_features:
+        for prefix in FORBIDDEN_PREFIXES:
+            if k == prefix or k.startswith(prefix):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Forbidden simulator/counterfactual feature detected: {k!r}",
+                )
+
+    # 2. Strict Whitelisting: Reject extra / undeclared properties
+    extra_keys = [k for k in raw_features if k not in ALLOWED_FEATURE_KEYS]
+    if extra_keys:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Undeclared feature fields rejected: {extra_keys}",
+        )
+
+    # 3. Completeness: Ensure all 9 required model features are present and non-null
+    missing = [col for col in OBSERVABLE_FEATURES if col not in raw_features or raw_features[col] is None]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Missing required observable features: {missing}",
+        )
+
+    # 4. Strict Numeric & Type Validation
+    # amount: float > 0
+    amt_raw = raw_features["amount"]
+    if not isinstance(amt_raw, (int, float)) or isinstance(amt_raw, bool):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="amount must be a numeric value")
+    if math.isnan(amt_raw) or math.isinf(amt_raw) or amt_raw <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="amount must be a finite number > 0")
+    amount = float(amt_raw)
+
+    # attempt_number: int >= 1
+    att_raw = raw_features["attempt_number"]
+    if not isinstance(att_raw, int) or isinstance(att_raw, bool) or att_raw < 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="attempt_number must be an integer >= 1")
+    attempt_number = int(att_raw)
+
+    # dynamic_success_rate: float in [0.0, 1.0]
+    dsr_raw = raw_features["dynamic_success_rate"]
+    if not isinstance(dsr_raw, (int, float)) or isinstance(dsr_raw, bool) or math.isnan(dsr_raw) or math.isinf(dsr_raw) or not (0.0 <= dsr_raw <= 1.0):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="dynamic_success_rate must be a finite number in [0.0, 1.0]")
+    dynamic_success_rate = float(dsr_raw)
+
+    # cumulative_failures: int >= 0
+    cf_raw = raw_features["cumulative_failures"]
+    if not isinstance(cf_raw, int) or isinstance(cf_raw, bool) or cf_raw < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cumulative_failures must be an integer >= 0")
+    cumulative_failures = int(cf_raw)
+
+    # consecutive_failed_cycles: int >= 0
+    cfc_raw = raw_features["consecutive_failed_cycles"]
+    if not isinstance(cfc_raw, int) or isinstance(cfc_raw, bool) or cfc_raw < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="consecutive_failed_cycles must be an integer >= 0")
+    consecutive_failed_cycles = int(cfc_raw)
+
+    # notification_engagement_score: float in [0.0, 1.0]
+    nes_raw = raw_features["notification_engagement_score"]
+    if not isinstance(nes_raw, (int, float)) or isinstance(nes_raw, bool) or math.isnan(nes_raw) or math.isinf(nes_raw) or not (0.0 <= nes_raw <= 1.0):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="notification_engagement_score must be a finite number in [0.0, 1.0]")
+    notification_engagement_score = float(nes_raw)
+
+    # contact_response_score: float in [0.0, 1.0]
+    crs_raw = raw_features["contact_response_score"]
+    if not isinstance(crs_raw, (int, float)) or isinstance(crs_raw, bool) or math.isnan(crs_raw) or math.isinf(crs_raw) or not (0.0 <= crs_raw <= 1.0):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contact_response_score must be a finite number in [0.0, 1.0]")
+    contact_response_score = float(crs_raw)
+
+    # payment_method: valid categorical
+    pm_raw = raw_features["payment_method"]
+    if not isinstance(pm_raw, str) or len(pm_raw) > 255 or pm_raw not in VALID_PAYMENT_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"payment_method must be one of {sorted(VALID_PAYMENT_METHODS)}, got {pm_raw!r}",
+        )
+    payment_method = str(pm_raw)
+
+    # failure_reason: valid categorical
+    fr_raw = raw_features["failure_reason"]
+    if not isinstance(fr_raw, str) or len(fr_raw) > 255 or fr_raw not in VALID_FAILURE_REASONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"failure_reason must be one of {sorted(VALID_FAILURE_REASONS)}, got {fr_raw!r}",
+        )
+    failure_reason = str(fr_raw)
+
+    # 5. Optional Operational / Guardrail Overrides (with cold-start defaults & anti-tamper bounds)
+    if "status" in raw_features and raw_features["status"] is not None:
+        st_raw = str(raw_features["status"]).strip().lower()
+        if st_raw not in {"failed", "pending", "success", "recovered"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid status: {raw_features['status']!r}")
+        status_val = st_raw
+    else:
+        # Documented cold-start default: payment recovery engine evaluates failed payments
+        status_val = "failed"
+
+    if "consecutive_failures" in raw_features and raw_features["consecutive_failures"] is not None:
+        cf_in = raw_features["consecutive_failures"]
+        if not isinstance(cf_in, int) or isinstance(cf_in, bool) or cf_in < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="consecutive_failures must be an integer >= 0")
+        effective_cf = max(int(cf_in), consecutive_failed_cycles)
+    else:
+        effective_cf = consecutive_failed_cycles
+
+    raw_rc = raw_features.get("retry_count_current_cycle", raw_features.get("retry_count"))
+    if raw_rc is not None:
+        if not isinstance(raw_rc, int) or isinstance(raw_rc, bool) or raw_rc < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="retry_count_current_cycle must be an integer >= 0")
+        effective_rc = max(int(raw_rc), max(0, attempt_number - 1))
+    else:
+        effective_rc = max(0, attempt_number - 1)
+
+    if "lifetime_escalations" in raw_features and raw_features["lifetime_escalations"] is not None:
+        le_in = raw_features["lifetime_escalations"]
+        if not isinstance(le_in, int) or isinstance(le_in, bool) or le_in < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="lifetime_escalations must be an integer >= 0")
+        effective_le = int(le_in)
+    else:
+        # Documented cold-start default: 0 lifetime escalations
+        effective_le = 0
+
+    raw_intv = raw_features.get("interventions_last_7_days", raw_features.get("interventions_7d"))
+    if raw_intv is not None:
+        if not isinstance(raw_intv, int) or isinstance(raw_intv, bool) or raw_intv < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="interventions_last_7_days must be an integer >= 0")
+        effective_intv = int(raw_intv)
+    else:
+        # Documented cold-start default: 0 prior interventions
+        effective_intv = 0
+
+    # 6. Partition Construction
+    observable_features = {
+        "amount": amount,
+        "attempt_number": attempt_number,
+        "dynamic_success_rate": dynamic_success_rate,
+        "cumulative_failures": cumulative_failures,
+        "consecutive_failed_cycles": consecutive_failed_cycles,
+        "notification_engagement_score": notification_engagement_score,
+        "contact_response_score": contact_response_score,
+        "payment_method": payment_method,
+        "failure_reason": failure_reason,
+    }
+
+    payment_context = {
+        "payment_id": payment_id,
+        "amount": amount,
+        "status": status_val,
+        "attempt_number": attempt_number,
+        "payment_method": payment_method,
+        "failure_reason": failure_reason,
+        "consecutive_failures": effective_cf,
+        "retry_count_current_cycle": effective_rc,
+    }
+
+    raw_days = raw_features.get("days_active", 0)
+    days_active = int(raw_days) if isinstance(raw_days, int) and not isinstance(raw_days, bool) and raw_days >= 0 else 0
+
+    customer_history = {
+        "customer_id": str(raw_features.get("customer_id", ""))[:255],
+        "days_active": days_active,
+        "dynamic_success_rate": dynamic_success_rate,
+        "cumulative_failures": cumulative_failures,
+        "consecutive_failed_cycles": consecutive_failed_cycles,
+        "notification_engagement_score": notification_engagement_score,
+        "contact_response_score": contact_response_score,
+        "lifetime_escalations": effective_le,
+        "interventions_last_7_days": effective_intv,
+    }
+
+    return observable_features, payment_context, customer_history
+
 
 
 # ── Response DTO Formatting ──────────────────────────────────────────────────
@@ -470,18 +706,41 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
         )
 
         # FIX 2: Obtain CURRENT payment/customer state before cache lookup
-        dataset = getattr(app.state, "dataset", None)
-        current_state = get_payment_state(payment_id, dataset=dataset)
-        current_fingerprint = None
-        if current_state is not None:
-            current_fingerprint = compute_state_fingerprint(
-                payment_id=current_state["payment_id"],
-                status=current_state["status"],
-                attempt_number=current_state["attempt_number"],
-                consecutive_failures=current_state["consecutive_failures"],
-                retry_count=current_state["retry_count"],
-                interventions_7d=current_state["interventions_7d"],
+        pre_populated_state = None
+        if req.features is not None:
+            # Caller-supplied feature evaluation (new/unseen payment path)
+            obs_feat, pmt_ctx, cust_hist = validate_and_parse_features(
+                payment_id=payment_id,
+                raw_features=req.features,
             )
+            current_fingerprint = compute_state_fingerprint(
+                payment_id=payment_id,
+                status=pmt_ctx["status"],
+                attempt_number=pmt_ctx["attempt_number"],
+                consecutive_failures=pmt_ctx["consecutive_failures"],
+                retry_count=pmt_ctx["retry_count_current_cycle"],
+                interventions_7d=cust_hist["interventions_last_7_days"],
+                decision_features=obs_feat,
+            )
+            pre_populated_state = {
+                "observable_features": obs_feat,
+                "payment_context": pmt_ctx,
+                "customer_history": cust_hist,
+            }
+        else:
+            # Standard CSV lookup path (known payment path)
+            dataset = getattr(app.state, "dataset", None)
+            current_state = get_payment_state(payment_id, dataset=dataset)
+            current_fingerprint = None
+            if current_state is not None:
+                current_fingerprint = compute_state_fingerprint(
+                    payment_id=current_state["payment_id"],
+                    status=current_state["status"],
+                    attempt_number=current_state["attempt_number"],
+                    consecutive_failures=current_state["consecutive_failures"],
+                    retry_count=current_state["retry_count"],
+                    interventions_7d=current_state["interventions_7d"],
+                )
 
         # 3. Inside the lock:
         repository: Optional[DecisionRepository] = getattr(app.state, "repository", None)
@@ -599,6 +858,8 @@ async def evaluate_decision(req: EvaluateRequest, request: Request, response: Re
             "audit_trail": [],
             "state_fingerprint": current_fingerprint,
         }
+        if pre_populated_state is not None:
+            initial_state.update(pre_populated_state)
 
         # Runtime context passed via standard RunnableConfig configurable dict (Issue 1 & 2)
         config = {

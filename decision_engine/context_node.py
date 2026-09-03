@@ -153,6 +153,7 @@ def context_node(
     ):
         pmt_ctx = state.get("payment_context", {})
         cust_hist = state.get("customer_history", {})
+        obs_feat = state.get("observable_features", {})
         fingerprint = state.get("state_fingerprint") or compute_state_fingerprint(
             payment_id=clean_pid,
             status=pmt_ctx.get("status", "failed"),
@@ -160,9 +161,13 @@ def context_node(
             consecutive_failures=pmt_ctx.get("consecutive_failures", 0),
             retry_count=pmt_ctx.get("retry_count_current_cycle", pmt_ctx.get("retry_count", 0)),
             interventions_7d=cust_hist.get("interventions_last_7_days", cust_hist.get("interventions_7d", 0)),
+            decision_features=obs_feat,
         )
         return {
             "payment_id": clean_pid,
+            "observable_features": obs_feat,
+            "payment_context": pmt_ctx,
+            "customer_history": cust_hist,
             "state_fingerprint": fingerprint,
             "error": None,
             "audit_trail": [

@@ -875,3 +875,314 @@ async def test_day7g_structured_request_logging(tmp_path: pathlib.Path, caplog: 
         await db.close()
 
 
+# ── FEATURE-BASED EVALUATION TESTS (DAY 9+) ──────────────────────────────────
+
+VALID_TEST_FEATURES = {
+    "amount": 1499.0,
+    "attempt_number": 1,
+    "dynamic_success_rate": 0.65,
+    "cumulative_failures": 0,
+    "consecutive_failed_cycles": 0,
+    "notification_engagement_score": 0.8,
+    "contact_response_score": 0.5,
+    "payment_method": "card",
+    "failure_reason": "insufficient_funds",
+}
+
+
+@pytest.mark.asyncio
+async def test_new_payment_feature_evaluation_success(tmp_path: pathlib.Path):
+    """
+    Test 1 & 4 & 14 & 21: Direct observable features for an unseen payment
+    reaches the inference and guardrail pipeline successfully and persists to DB.
+    """
+    app_instance, db, _ = await init_test_app(tmp_path)
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            new_pid = "pay_999999_a1"
+            req_id = "req-new-payment-001"
+
+            resp = await client.post(
+                "/evaluate",
+                headers={"X-Request-Id": req_id},
+                json={
+                    "payment_id": new_pid,
+                    "features": VALID_TEST_FEATURES,
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+
+            # Verify response adheres to contract
+            assert data["payment_id"] == new_pid
+            assert data["final_action"] in {"WAIT", "RETRY", "RETRY_NUDGE", "ESCALATE"}
+            assert data["model_decision"] in {"WAIT", "RETRY", "RETRY_NUDGE", "ESCALATE"}
+            assert data["decision_source"] != "error_path"
+            assert data["confidence"] > 0.0
+            assert data["request_id"] == req_id
+
+            # Verify persisted in database
+            async with db.execute(
+                "SELECT payment_id, final_action, decision_source, state_fingerprint FROM decision_audit WHERE payment_id = ?",
+                (new_pid,),
+            ) as cur:
+                row = await cur.fetchone()
+                assert row is not None
+                assert row[0] == new_pid
+                assert row[1] == data["final_action"]
+                assert row[2] != "error_path"
+                assert row[3] is not None
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_new_payment_idempotent_cache_hit(tmp_path: pathlib.Path):
+    """
+    Test 5 & 24: Repeated request for same new payment with identical features
+    returns cached decision (decision_source='cache') without re-invoking LLM.
+    """
+    app_instance, db, mock_llm = await init_test_app(tmp_path)
+    structured_mock = mock_llm.with_structured_output.return_value
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            new_pid = "pay_999999_a2"
+
+            # 1. First evaluation: fresh computation
+            resp1 = await client.post(
+                "/evaluate",
+                json={
+                    "payment_id": new_pid,
+                    "features": VALID_TEST_FEATURES,
+                },
+            )
+            assert resp1.status_code == 200
+            data1 = resp1.json()
+            assert data1["decision_source"] != "cache"
+            assert structured_mock.ainvoke.call_count == 1
+
+            # 2. Second evaluation: identical features -> cache hit
+            resp2 = await client.post(
+                "/evaluate",
+                json={
+                    "payment_id": new_pid,
+                    "features": VALID_TEST_FEATURES,
+                },
+            )
+            assert resp2.status_code == 200
+            data2 = resp2.json()
+            assert data2["decision_source"] == "cache"
+            assert data2["final_action"] == data1["final_action"]
+            assert data2["model_decision"] == data1["model_decision"]
+
+            # Verify LLM was NOT invoked a second time
+            assert structured_mock.ainvoke.call_count == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_new_payment_changed_features_triggers_fresh_evaluation(tmp_path: pathlib.Path):
+    """
+    Test 6 & 25: Same new payment with changed decision-relevant feature
+    triggers cache miss and produces fresh evaluation.
+    """
+    app_instance, db, mock_llm = await init_test_app(tmp_path)
+    structured_mock = mock_llm.with_structured_output.return_value
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            new_pid = "pay_999999_a3"
+
+            # 1. Initial request with amount = 1499.0
+            resp1 = await client.post(
+                "/evaluate",
+                json={
+                    "payment_id": new_pid,
+                    "features": VALID_TEST_FEATURES,
+                },
+            )
+            assert resp1.status_code == 200
+            assert resp1.json()["decision_source"] != "cache"
+            assert structured_mock.ainvoke.call_count == 1
+
+            # 2. Subsequent request with changed decision feature: amount = 50000.0
+            changed_features = dict(VALID_TEST_FEATURES)
+            changed_features["amount"] = 50000.0
+
+            resp2 = await client.post(
+                "/evaluate",
+                json={
+                    "payment_id": new_pid,
+                    "features": changed_features,
+                },
+            )
+            assert resp2.status_code == 200
+            data2 = resp2.json()
+            assert data2["decision_source"] != "cache"
+            # Second call triggered fresh evaluation
+            assert structured_mock.ainvoke.call_count == 2
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_payment_without_features_returns_payment_not_found(tmp_path: pathlib.Path):
+    """
+    Test 7: Unseen payment without features preserves existing PAYMENT_NOT_FOUND error path.
+    """
+    app_instance, db, _ = await init_test_app(tmp_path)
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/evaluate",
+                json={"payment_id": "pay_999999_a4"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["final_action"] == "WAIT"
+            assert data["decision_source"] == "error_path"
+            assert "PAYMENT_NOT_FOUND" in data["guardrail_reason"]
+            assert data["confidence"] == 0.0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_feature_validation_errors(tmp_path: pathlib.Path):
+    """
+    Tests 8 through 12, 16 through 19: Strict validation of missing features,
+    invalid ranges, undeclared/forbidden fields, and malformed numeric values.
+    """
+    app_instance, db, _ = await init_test_app(tmp_path)
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            target_pid = "pay_999999_a5"
+
+            # Test 8: Missing required observable feature
+            incomplete = dict(VALID_TEST_FEATURES)
+            del incomplete["amount"]
+            r1 = await client.post("/evaluate", json={"payment_id": target_pid, "features": incomplete})
+            assert r1.status_code == 400
+            assert "Missing required observable features" in r1.text
+
+            # Test 9: Invalid numeric range (amount <= 0)
+            r2 = await client.post(
+                "/evaluate",
+                json={"payment_id": target_pid, "features": {**VALID_TEST_FEATURES, "amount": -10.0}},
+            )
+            assert r2.status_code == 400
+
+            # Test 10: Invalid categorical value
+            r3 = await client.post(
+                "/evaluate",
+                json={"payment_id": target_pid, "features": {**VALID_TEST_FEATURES, "payment_method": "crypto"}},
+            )
+            assert r3.status_code == 400
+
+            # Test 11: Extra / undeclared field
+            r4 = await client.post(
+                "/evaluate",
+                json={"payment_id": target_pid, "features": {**VALID_TEST_FEATURES, "unknown_field": 123}},
+            )
+            assert r4.status_code == 400
+
+            # Test 12: Forbidden simulator field
+            r5 = await client.post(
+                "/evaluate",
+                json={"payment_id": target_pid, "features": {**VALID_TEST_FEATURES, "p_success_retry": 0.9}},
+            )
+            assert r5.status_code == 400
+
+            # Test 16-17: Non-numeric / NaN / String where number expected
+            r6 = await client.post(
+                "/evaluate",
+                json={"payment_id": target_pid, "features": {**VALID_TEST_FEATURES, "dynamic_success_rate": "not_a_number"}},
+            )
+            assert r6.status_code == 400
+
+            # Raw non-compliant float literal NaN
+            r6_raw = await client.post(
+                "/evaluate",
+                content=b'{"payment_id": "pay_999999_a5", "features": {"amount": NaN}}',
+                headers={"Content-Type": "application/json"},
+            )
+            assert r6_raw.status_code == 400
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_anti_tamper_and_cold_start_defaults(tmp_path: pathlib.Path):
+    """
+    Test 13: Authoritative conservative operational bounds prevent client from
+    tampering with history to bypass guardrails.
+    """
+    # Create test app with mock LLM returning RETRY so Rule 4 is triggered
+    app_instance, db, _ = await init_test_app(tmp_path)
+    retry_llm = make_mock_llm(decision="RETRY", confidence=0.90)
+    app_instance.state.graph = create_recovery_graph(
+        policy=app_instance.state.policy,
+        llm=retry_llm,
+        use_async=True,
+    )
+    try:
+        transport = ASGITransport(app=app_instance)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            target_pid = "pay_999999_a6"
+
+            # Case A: consecutive_failed_cycles = 3, client attempts consecutive_failures = 0
+            # System authoritatively bounds consecutive_failures to max(0, 3) = 3
+            # Triggers Guardrail Rule 2 (Consecutive failure limit reached -> STOP)
+            resp_tamper_failures = await client.post(
+                "/evaluate",
+                json={
+                    "payment_id": target_pid,
+                    "features": {
+                        **VALID_TEST_FEATURES,
+                        "consecutive_failed_cycles": 3,
+                        "consecutive_failures": 0,  # attempt to tamper
+                    },
+                },
+            )
+            assert resp_tamper_failures.status_code == 200
+            assert resp_tamper_failures.json()["final_action"] == "STOP"
+
+            # Case B: Interventions cap (Rule 5): interventions_last_7_days = 2
+            # Triggers Guardrail Rule 5 (Maximum interventions in 7-day window reached -> WAIT)
+            target_pid_b = "pay_999999_a7"
+            resp_tamper_intv = await client.post(
+                "/evaluate",
+                json={
+                    "payment_id": target_pid_b,
+                    "features": {
+                        **VALID_TEST_FEATURES,
+                        "interventions_last_7_days": 2,
+                    },
+                },
+            )
+            assert resp_tamper_intv.status_code == 200
+            assert resp_tamper_intv.json()["final_action"] == "WAIT"
+            assert "Maximum interventions in 7-day window reached" in resp_tamper_intv.json()["guardrail_reason"]
+
+            # Case C: status is "success" -> recovery action is WAIT
+            target_pid_c = "pay_999999_a8"
+            resp_success_state = await client.post(
+                "/evaluate",
+                json={
+                    "payment_id": target_pid_c,
+                    "features": {
+                        **VALID_TEST_FEATURES,
+                        "status": "success",
+                    },
+                },
+            )
+            assert resp_success_state.status_code == 200
+            assert resp_success_state.json()["final_action"] == "WAIT"
+    finally:
+        await db.close()
+

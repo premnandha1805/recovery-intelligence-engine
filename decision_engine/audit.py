@@ -32,20 +32,48 @@ def compute_state_fingerprint(
     consecutive_failures: int,
     retry_count: int,
     interventions_7d: int,
+    decision_features: Optional[dict[str, Any]] = None,
 ) -> str:
     """
-    Compute a deterministic SHA-256 state fingerprint across the exact 6 inputs:
-    payment_id, status, attempt_number, consecutive_failures, retry_count, interventions_7d.
+    Compute a deterministic SHA-256 state fingerprint across operational state
+    and, when provided, decision-relevant input features.
+
+    For known payments (decision_features is None):
+        Maintains exact Day 9 6-field canonical representation across:
+        payment_id, status, attempt_number, consecutive_failures, retry_count, interventions_7d.
+    For caller-supplied features:
+        Incorporates the 9 canonical decision-relevant model features (OBSERVABLE_FEATURES)
+        to guarantee that changed decision states trigger fresh evaluation while identical
+        decision states hit persistent cache.
     """
+    payload: dict[str, Any] = {
+        "payment_id": str(payment_id),
+        "status": str(status),
+        "attempt_number": int(attempt_number),
+        "consecutive_failures": int(consecutive_failures),
+        "retry_count": int(retry_count),
+        "interventions_7d": int(interventions_7d),
+    }
+
+    if decision_features:
+        from ml.dataset import OBSERVABLE_FEATURES
+
+        # Extract strictly the 9 canonical model features that determine inference & net value
+        canonical_model_features: dict[str, Any] = {}
+        for col in sorted(OBSERVABLE_FEATURES):
+            if col in decision_features:
+                val = decision_features[col]
+                # Normalize numeric types to float/int for canonical serialization
+                if isinstance(val, (int, float)):
+                    canonical_model_features[col] = float(val) if isinstance(val, float) else int(val)
+                else:
+                    canonical_model_features[col] = str(val)
+
+        if canonical_model_features:
+            payload["decision_features"] = canonical_model_features
+
     canonical_repr = json.dumps(
-        {
-            "payment_id": str(payment_id),
-            "status": str(status),
-            "attempt_number": int(attempt_number),
-            "consecutive_failures": int(consecutive_failures),
-            "retry_count": int(retry_count),
-            "interventions_7d": int(interventions_7d),
-        },
+        payload,
         sort_keys=True,
         separators=(",", ":"),
     )

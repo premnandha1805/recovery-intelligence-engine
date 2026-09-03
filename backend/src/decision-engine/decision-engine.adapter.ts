@@ -116,6 +116,7 @@ export class DecisionEngineAdapter implements OnModuleDestroy {
     paymentId: string,
     requestId: string,
     forceRecompute: boolean = false,
+    features?: Record<string, any>,
   ): Promise<PythonDecisionResult> {
     const maxAttempts = 2; // Initial attempt + 1 retry on network-level failure
     let lastError: any;
@@ -126,6 +127,7 @@ export class DecisionEngineAdapter implements OnModuleDestroy {
           paymentId,
           requestId,
           forceRecompute,
+          features,
         );
       } catch (err: any) {
         lastError = err;
@@ -172,17 +174,23 @@ export class DecisionEngineAdapter implements OnModuleDestroy {
     paymentId: string,
     requestId: string,
     forceRecompute: boolean,
+    features?: Record<string, any>,
   ): Promise<PythonDecisionResult> {
     const url = new URL('/evaluate', this.decisionEngineUrl);
     const isHttps = url.protocol === 'https:';
     const transport = isHttps ? https : http;
     const agent = isHttps ? this.httpsAgent : this.httpAgent;
 
-    const payload = JSON.stringify({
+    const body: Record<string, any> = {
       payment_id: paymentId,
       request_id: requestId,
       force_recompute: forceRecompute,
-    });
+    };
+    if (features !== undefined && features !== null) {
+      body.features = features;
+    }
+
+    const payload = JSON.stringify(body);
 
     return new Promise<PythonDecisionResult>((resolve, reject) => {
       let settled = false;
