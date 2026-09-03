@@ -1,0 +1,98 @@
+# docker-compose.prod.yml
+# ========================
+# Production Docker Compose stack for Recovery Intelligence Engine.
+# Services:
+#   - postgres: PostgreSQL 17 database
+#   - python-decision-engine: FastAPI decision service
+#   - recovery-api: NestJS API gateway
+#
+# All credentials and runtime configs are supplied via .env.prod.
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: recovery-intelligence-postgres-prod
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - recovery_prod_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    networks:
+      - recovery-prod-network
+
+  python-decision-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: recovery-intelligence-engine:day9b
+    container_name: recovery-intelligence-engine-prod
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      PERSISTENCE_BACKEND: ${PERSISTENCE_BACKEND:-postgres}
+      DATABASE_URL: ${DATABASE_URL}
+      DB_POOL_MIN: ${DB_POOL_MIN:-2}
+      DB_POOL_MAX: ${DB_POOL_MAX:-10}
+      DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-5000}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    stop_grace_period: 12s
+    networks:
+      - recovery-prod-network
+
+  recovery-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: recovery-intelligence-api:day9c
+    container_name: recovery-intelligence-api-prod
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      PORT: 3000
+      DECISION_ENGINE_URL: ${DECISION_ENGINE_URL:-http://python-decision-engine:8000}
+      DECISION_ENGINE_TIMEOUT_MS: ${DECISION_ENGINE_TIMEOUT_MS:-8000}
+      HEALTH_CHECK_TIMEOUT_MS: ${HEALTH_CHECK_TIMEOUT_MS:-1000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      python-decision-engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    stop_grace_period: 12s
+    networks:
+      - recovery-prod-network
+
+volumes:
+  recovery_prod_pgdata:
+
+networks:
+  recovery-prod-network:
+    name: recovery-prod-network

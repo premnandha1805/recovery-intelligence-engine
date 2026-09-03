@@ -1,15 +1,21 @@
 """
-Customer generator — creates synthetic customers with observable AND hidden traits.
+Customer generator (v2).
 
-Observable traits (what the model sees):
-    customer_id, customer_tier, historical_success_rate,
-    previous_failure_count, average_payment_delay, payment_method
+Customer archetypes, hidden traits, and base observable features use the
+same logic and distributions as v1.
 
-Hidden traits (simulator-only ground truth):
-    intrinsic_recovery_probability, retry_responsiveness, nudge_responsiveness
+New in this version:
+    Two observable proxy columns are appended after all customers are
+    generated, using noise RNGs derived from the main seed so that
+    single-argument reproducibility holds across the full pipeline:
 
-The hidden values are generated from the customer's archetype (CustomerType)
-but are NEVER exposed to the model.
+        notification_engagement_score   — noisy proxy for nudge responsiveness
+        contact_response_score          — noisy proxy for retry responsiveness
+
+    Both use coeff=1.0, noise_std=0.22, and are clipped to [0, 1].
+    Noise seeds are  (seed + 1001)  and  (seed + 2002)  respectively.
+
+v2 sequencing changes live in payment_generator.py and ground_truth.py.
 """
 
 import numpy as np
@@ -40,6 +46,9 @@ def _sample_hidden_traits(customer_type: CustomerType, rng: np.random.Generator)
         "intrinsic_recovery_probability": round(float(probs[0]), 4),
         "retry_responsiveness": round(float(probs[1] - probs[0]), 4),
         "nudge_responsiveness": round(float(probs[2] - probs[0]), 4),
+        # escalate: responsiveness computed relative to max(retry, nudge)
+        # Note: escalate_responsiveness can be negative (penalised customers)
+        "escalate_responsiveness": round(float(probs[3] - max(probs[1], probs[2])), 4),
     }
 
 
@@ -100,12 +109,31 @@ def _sample_observable_traits(
     }
 
 
-def generate_customers(n: int, rng: np.random.Generator) -> pd.DataFrame:
+def generate_customers(n: int, rng: np.random.Generator, seed: int = 0) -> pd.DataFrame:
     """
     Generate *n* customers with observable + hidden columns.
 
-    Returns a single DataFrame. Hidden columns are prefixed with `_hidden_`
-    so they can easily be stripped before model training.
+    Parameters
+    ----------
+    n : int
+        Number of customers to generate.
+    rng : np.random.Generator
+        Primary seeded generator — shared across the full pipeline.
+        All archetype, trait, and observable draws consume from this.
+    seed : int
+        The same seed passed to ``np.random.default_rng`` for the primary
+        ``rng``.  Used ONLY to derive two secondary generators for the
+        proxy-column noise so they are reproducible but independent of the
+        primary draw sequence::
+
+            notification_engagement_score noise  ->  default_rng(seed + 1001)
+            contact_response_score noise         ->  default_rng(seed + 2002)
+
+    Returns
+    -------
+    pd.DataFrame
+        Hidden columns are prefixed with ``_hidden_`` and stripped before
+        writing ``payment_scenarios.csv``.
     """
     types = list(CUSTOMER_TYPE_WEIGHTS.keys())
     type_p = np.array([CUSTOMER_TYPE_WEIGHTS[t] for t in types])
@@ -122,11 +150,40 @@ def generate_customers(n: int, rng: np.random.Generator) -> pd.DataFrame:
         rows.append({
             "customer_id": customer_id,
             **observable,
-            # Hidden columns (simulator-only)
+            # Hidden columns (simulator-only — never serialized to payment_scenarios)
             "_hidden_customer_type": hidden["customer_type"],
             "_hidden_intrinsic_recovery_prob": hidden["intrinsic_recovery_probability"],
             "_hidden_retry_responsiveness": hidden["retry_responsiveness"],
             "_hidden_nudge_responsiveness": hidden["nudge_responsiveness"],
+            "_hidden_escalate_responsiveness": hidden["escalate_responsiveness"],
         })
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+
+    # ── Observable proxy columns for treatment responsiveness ─────────────────
+    # Generated AFTER the full population exists so population means are exact.
+    # Noise RNGs are derived from `seed` (not from `rng`) to keep them
+    # independent of the primary draw sequence while remaining reproducible.
+
+    nudge_resp  = df["_hidden_nudge_responsiveness"].values
+    retry_resp  = df["_hidden_retry_responsiveness"].values
+    nudge_pop_mean = float(nudge_resp.mean())
+    retry_pop_mean = float(retry_resp.mean())
+
+    # notification_engagement_score  — noisy proxy for nudge responsiveness
+    rng_nudge = np.random.default_rng(seed + 1001)
+    noise_nudge = rng_nudge.normal(0.0, 0.22, size=n)
+    df["notification_engagement_score"] = np.clip(
+        0.5 + 1.0 * (nudge_resp - nudge_pop_mean) + noise_nudge,
+        0.0, 1.0,
+    ).round(4)
+
+    # contact_response_score  — noisy proxy for retry responsiveness
+    rng_retry = np.random.default_rng(seed + 2002)
+    noise_retry = rng_retry.normal(0.0, 0.22, size=n)
+    df["contact_response_score"] = np.clip(
+        0.5 + 1.0 * (retry_resp - retry_pop_mean) + noise_retry,
+        0.0, 1.0,
+    ).round(4)
+
+    return df

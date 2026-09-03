@@ -1,0 +1,30 @@
+# docker-compose.yml
+# ==================
+# Local Development PostgreSQL service for the Recovery Intelligence Engine.
+#
+# NOTE: This environment is isolated from the test environment:
+# - Development Database: port 5432, database 'recovery_dev', user 'recovery_dev', volume 'recovery_dev_pgdata'
+# - Test Database (docker-compose.test.yml): port 5433, database 'recovery_test', user 'recovery_test', volume 'recovery_test_pgdata'
+#
+# Password MUST be supplied via environment variable POSTGRES_DEV_PASSWORD (.env).
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: recovery-intelligence-postgres
+    environment:
+      POSTGRES_USER: recovery_dev
+      POSTGRES_PASSWORD: ${POSTGRES_DEV_PASSWORD}
+      POSTGRES_DB: recovery_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - recovery_dev_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recovery_dev -d recovery_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  recovery_dev_pgdata:

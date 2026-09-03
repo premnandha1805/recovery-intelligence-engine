@@ -1,0 +1,13 @@
+Training Seed,Evaluation Population,Causal Net Value,RuleBased Net Value,Difference (INR),% Difference,Causal Rank
+2024,Seed 42 (In-Sample Fit Check),"INR 17,450,062.53","INR 14,822,365.69","+2,627,696.84",+17.73%,#1
+1111,Seed 42 (In-Sample Fit Check),"INR 17,575,990.22","INR 14,822,365.69","+2,753,624.53",+18.58%,#1
+7777,Seed 42 (In-Sample Fit Check),"INR 17,514,852.36","INR 14,822,365.69","+2,692,486.67",+18.17%,#1
+9999,Seed 42 (In-Sample Fit Check),"INR 17,488,903.17","INR 14,822,365.69","+2,666,537.48",+17.99%,#1
+2024,Seed 777 (OOS Population 1),"INR 16,486,990.85","INR 14,433,756.53","+2,053,234.32",+14.23%,#1
+1111,Seed 777 (OOS Population 1),"INR 16,724,955.32","INR 14,433,756.53","+2,291,198.79",+15.87%,#1
+7777,Seed 777 (OOS Population 1),"INR 16,685,122.90","INR 14,433,756.53","+2,251,366.37",+15.60%,#1
+9999,Seed 777 (OOS Population 1),"INR 16,769,705.70","INR 14,433,756.53","+2,335,949.17",+16.18%,#1
+2024,Seed 555 (OOS Population 2),"INR 17,491,398.62","INR 14,817,685.72","+2,673,712.90",+18.04%,#1
+1111,Seed 555 (OOS Population 2),"INR 17,403,715.92","INR 14,817,685.72","+2,586,030.20",+17.45%,#1
+7777,Seed 555 (OOS Population 2),"INR 17,405,316.30","INR 14,817,685.72","+2,587,630.58",+17.46%,#1
+9999,Seed 555 (OOS Population 2),"INR 17,313,881.87","INR 14,817,685.72","+2,496,196.15",+16.85%,#1
