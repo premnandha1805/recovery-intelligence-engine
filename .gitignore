@@ -44,6 +44,16 @@ htmlcov/
 backend/dist/
 backend/node_modules/
 
+# Frontend Build, Dependencies & Temporary Artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env*
+frontend/*.tsbuildinfo
+frontend/*.mjs
+frontend/*_report.json
+frontend/**/screen.png
+
 # SQLite local audit databases
 *.sqlite
 *.sqlite3

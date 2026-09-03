@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{"colors":{"secondary-container":"#03b5d3","on-secondary-fixed":"#001f26","on-primary-fixed":"#002113","on-error":"#690005","on-primary-container":"#00422b","surface":"#0f131c","surface-container-low":"#181c24","on-tertiary-fixed":"#2a1700","surface-container-highest":"#31353e","surface-tint":"#4edea3","surface-container":"#1c2028","inverse-on-surface":"#2c3039","on-tertiary-fixed-variant":"#653e00","secondary-fixed":"#acedff","outline-variant":"#3c4a42","inverse-primary":"#006c49","tertiary":"#ffb95f","tertiary-container":"#e29100","on-surface":"#dfe2ee","on-primary":"#003824","surface-container-lowest":"#0a0e16","on-secondary-container":"#00424e","error":"#ffb4ab","on-background":"#dfe2ee","on-error-container":"#ffdad6","primary-container":"#10b981","outline":"#86948a","on-primary-fixed-variant":"#005236","on-secondary-fixed-variant":"#004e5c","on-surface-variant":"#bbcabf","error-container":"#93000a","tertiary-fixed":"#ffddb8","background":"#0f131c","surface-container-high":"#262a33","on-tertiary-container":"#523200","surface-variant":"#31353e","primary-fixed-dim":"#4edea3","tertiary-fixed-dim":"#ffb95f","secondary-fixed-dim":"#4cd7f6","secondary":"#4cd7f6","primary-fixed":"#6ffbbe","inverse-surface":"#dfe2ee","surface-bright":"#353942","primary":"#4edea3","on-secondary":"#003640","surface-dim":"#0f131c","on-tertiary":"#472a00"},"borderRadius":{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},"spacing":{"space-base":"1rem","space-2xl":"2rem","space-xl":"1.5rem","space-xs":"0.25rem","space-2xs":"0.125rem","gutter-mobile":"0.75rem","space-md":"0.75rem","panel-padding-compact":"0.875rem","space-3xl":"3rem","space-lg":"1.25rem","space-sm":"0.5rem","panel-padding-standard":"1.25rem","gutter-desktop":"1.5rem"},"fontFamily":{"mono-metric-md":["JetBrains Mono"],"label-badge":["JetBrains Mono"],"display-lg":["Inter"],"label-caps":["JetBrains Mono"],"body-sm":["Inter"],"display-lg-mobile":["Inter"],"body-md":["Inter"],"mono-metric-lg":["JetBrains Mono"],"headline-lg":["Inter"],"body-lg":["Inter"],"headline-md":["Inter"],"mono-code-sm":["JetBrains Mono"],"headline-sm":["Inter"]},"fontSize":{"mono-metric-md":["16px",{"lineHeight":"22px","letterSpacing":"-0.02em","fontWeight":"500"}],"label-badge":["10px",{"lineHeight":"12px","letterSpacing":"0.04em","fontWeight":"500"}],"display-lg":["32px",{"lineHeight":"40px","letterSpacing":"-0.025em","fontWeight":"600"}],"label-caps":["11px",{"lineHeight":"14px","letterSpacing":"0.06em","fontWeight":"600"}],"body-sm":["12px",{"lineHeight":"18px","letterSpacing":"0em","fontWeight":"400"}],"display-lg-mobile":["24px",{"lineHeight":"32px","letterSpacing":"-0.02em","fontWeight":"600"}],"body-md":["13px",{"lineHeight":"20px","letterSpacing":"0em","fontWeight":"400"}],"mono-metric-lg":["24px",{"lineHeight":"30px","letterSpacing":"-0.03em","fontWeight":"500"}],"headline-lg":["24px",{"lineHeight":"32px","letterSpacing":"-0.02em","fontWeight":"600"}],"body-lg":["15px",{"lineHeight":"24px","letterSpacing":"-0.005em","fontWeight":"400"}],"headline-md":["18px",{"lineHeight":"26px","letterSpacing":"-0.015em","fontWeight":"600"}],"mono-code-sm":["12px",{"lineHeight":"18px","letterSpacing":"0em","fontWeight":"400"}],"headline-sm":["15px",{"lineHeight":"22px","letterSpacing":"-0.01em","fontWeight":"600"}]}}}}</script></head><body class="bg-surface font-body-md text-body-md text-on-surface antialiased min-h-screen"><header class="fixed top-0 left-0 w-full z-50 bg-surface/90 backdrop-blur-xl border-b border-surface-container-high"><div class="h-20 max-w-[1440px] mx-auto px-gutter-desktop flex items-center justify-between gap-space-lg"><div class="flex items-center gap-space-md"><img alt="Recovery Intelligence Engine Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1X9tiajaVhbMErEH5uUblrS2G0u6M4FSxN3EZAfHOIV_Z7MFUSm2AGE_sfuuvOrPdk4jjqXj6oqR39RTnXmrM93fNjeoggvJCuLQZTFRpd_N80oorGmHdNp-y4WPuXA513-oMhBPy0GuBu9F4vbPAfRIlVJpv3IKgfhYDGYM4aiNpqWZclVcaIZvcD8NdHojS5PTILEQ2-0AAnGBcsEN5mL9N77nVx6KXZTIrSx_IXMWe9Anm_ATpKpRcU"/><div class="flex flex-col"><div class="flex items-center gap-space-sm"><span class="font-headline-sm text-headline-sm tracking-tight text-on-surface font-semibold">RECOVERY INTELLIGENCE ENGINE</span><span class="font-label-badge text-label-badge uppercase px-space-xs py-space-2xs bg-surface-container-high text-primary rounded border border-outline-variant/40">CAUSAL v2.4</span></div><span class="font-body-sm text-body-sm text-on-surface-variant">Decision intelligence for payment recovery</span></div></div><nav class="flex items-center gap-space-xs h-full" data-active-classes="bg-surface-container-high text-on-surface border-b-2 border-primary"><a aria-current="page" class="h-full flex items-center px-space-md font-label-caps uppercase transition-colors bg-surface-container-high text-on-surface border-b-2 border-primary" data-path="live-decision" href="#">LIVE DECISION</a><a class="h-full flex items-center px-space-md font-label-caps text-label-caps uppercase text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-path="policy-comparison" href="#">POLICY COMPARISON</a><a class="h-full flex items-center px-space-md font-label-caps text-label-caps uppercase text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors" data-path="audit-trail" href="#">AUDIT TRAIL</a></nav><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs px-space-sm py-space-2xs bg-surface-container-low rounded border border-outline-variant/30"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span></span><span class="font-label-caps text-label-caps text-on-surface-variant uppercase">LIVE API:</span><span class="font-label-caps text-label-caps text-primary font-medium">Healthy</span></div><div class="px-space-sm py-space-2xs bg-surface-container-low rounded border border-outline-variant/30 font-mono-code-sm text-mono-code-sm text-on-surface-variant"><span class="text-secondary font-medium">42ms</span></div><div class="px-space-sm py-space-2xs bg-surface-container-high rounded border border-outline-variant/50 font-label-badge text-label-badge uppercase text-on-surface-variant tracking-wider">PROD-CLUSTER-01</div><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></div></header><main class="w-full pt-20 max-w-[1440px] mx-auto px-gutter-desktop min-h-screen bg-surface"><div class="flex flex-col w-full text-on-surface">
+<!-- Top Section: Causal Recovery Engine Context & Value Framework -->
+<section class="flex flex-col gap-space-md mb-space-xl">
+<div class="flex flex-col lg:flex-row lg:items-end justify-between gap-space-base">
+<div>
+<div class="flex items-center gap-space-sm mb-space-xs">
+<span class="px-space-sm py-space-2xs bg-surface-container-high rounded text-primary font-label-caps text-label-caps tracking-wider uppercase">Pipeline Node #37B</span>
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface-variant">Cluster: ap-south-mumbai-01</span>
+</div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">Recovery Intelligence Engine</h1>
+<p class="font-body-md text-body-md text-on-surface-variant">Causal recovery decisions for failed payments</p>
+</div>
+<div class="flex items-center gap-space-sm font-mono-code-sm text-mono-code-sm bg-surface-container-low px-space-md py-space-xs rounded shadow-sm">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+<span class="text-on-surface-variant">Model Inference Target:</span>
+<span class="text-primary font-medium">≤ 65ms SLA</span>
+</div>
+</div>
+<!-- Core Rule Banner -->
+<div class="relative overflow-hidden rounded-xl bg-surface-container p-space-lg shadow-xl">
+<div class="absolute -right-16 -top-16 w-64 h-64 rounded-full bg-primary/5 blur-3xl pointer-events-none"></div>
+<div class="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-space-md">
+<div class="flex items-start gap-space-md">
+<div class="p-space-sm rounded-lg bg-primary/10 text-primary mt-0.5">
+<span class="material-symbols-outlined text-[24px]">account_balance_wallet</span>
+</div>
+<div>
+<div class="font-headline-md text-headline-md text-on-surface tracking-tight">
+              “Choose the recovery action with the highest expected net value.”
+            </div>
+<div class="font-body-sm text-body-sm text-on-surface-variant mt-space-2xs flex items-center gap-space-xs flex-wrap">
+<span class="text-secondary font-mono-code-sm text-mono-code-sm">Observable payment state</span>
+<span class="text-outline">→</span>
+<span class="text-on-surface font-mono-code-sm text-mono-code-sm">recovery probability</span>
+<span class="text-outline">→</span>
+<span class="text-primary font-mono-code-sm text-mono-code-sm">action economics</span>
+<span class="text-outline">→</span>
+<span class="text-primary font-mono-code-sm text-mono-code-sm font-semibold">governed final action</span>
+</div>
+</div>
+</div>
+<div class="flex items-center gap-space-sm shrink-0">
+<span class="px-space-sm py-space-2xs bg-surface-container-high rounded text-on-surface-variant font-label-caps text-label-caps uppercase">Strict Safety Enforced</span>
+</div>
+</div>
+</div>
+<!-- Horizontal Architecture Pipeline Stage Bar -->
+<div class="bg-surface-container-low rounded-lg p-space-sm shadow-md overflow-x-auto">
+<div class="flex items-center min-w-[860px] justify-between gap-space-xs">
+<!-- Stage 1 -->
+<div class="flex items-center gap-space-xs flex-1 bg-surface-container px-space-sm py-space-xs rounded">
+<span class="material-symbols-outlined text-primary text-[18px]">data_object</span>
+<div class="flex flex-col min-w-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase truncate">1. Features</span>
+<span class="font-mono-code-sm text-mono-code-sm text-primary truncate">Active • Checked</span>
+</div>
+</div>
+<span class="text-outline-variant font-mono-code-sm text-mono-code-sm px-space-2xs">→</span>
+<!-- Stage 2 -->
+<div class="flex items-center gap-space-xs flex-1 bg-surface-container px-space-sm py-space-xs rounded">
+<span class="material-symbols-outlined text-primary text-[18px]">schema</span>
+<div class="flex flex-col min-w-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase truncate">2. Causal Policy</span>
+<span class="font-mono-code-sm text-mono-code-sm text-primary truncate">Active • Checked</span>
+</div>
+</div>
+<span class="text-outline-variant font-mono-code-sm text-mono-code-sm px-space-2xs">→</span>
+<!-- Stage 3 -->
+<div class="flex items-center gap-space-xs flex-1 bg-surface-container px-space-sm py-space-xs rounded">
+<span class="material-symbols-outlined text-primary text-[18px]">trending_up</span>
+<div class="flex flex-col min-w-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase truncate">3. Expected Net</span>
+<span class="font-mono-code-sm text-mono-code-sm text-primary truncate">Active • ₹4,912</span>
+</div>
+</div>
+<span class="text-outline-variant font-mono-code-sm text-mono-code-sm px-space-2xs">→</span>
+<!-- Stage 4 -->
+<div class="flex items-center gap-space-xs flex-1 bg-surface-container px-space-sm py-space-xs rounded">
+<span class="material-symbols-outlined text-secondary text-[18px]">auto_awesome</span>
+<div class="flex flex-col min-w-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase truncate">4. LLM Reasoner</span>
+<span class="font-mono-code-sm text-mono-code-sm text-secondary truncate">Active • Synthesized</span>
+</div>
+</div>
+<span class="text-outline-variant font-mono-code-sm text-mono-code-sm px-space-2xs">→</span>
+<!-- Stage 5 -->
+<div class="flex items-center gap-space-xs flex-1 bg-surface-container px-space-sm py-space-xs rounded">
+<span class="material-symbols-outlined text-primary text-[18px]">verified_user</span>
+<div class="flex flex-col min-w-0">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase truncate">5. Guardrails</span>
+<span class="font-mono-code-sm text-mono-code-sm text-primary truncate">Passed (Rule #14)</span>
+</div>
+</div>
+<span class="text-outline-variant font-mono-code-sm text-mono-code-sm px-space-2xs">→</span>
+<!-- Stage 6 -->
+<div class="flex items-center gap-space-xs flex-1 bg-primary/10 px-space-sm py-space-xs rounded">
+<span class="material-symbols-outlined text-primary text-[18px]">bolt</span>
+<div class="flex flex-col min-w-0">
+<span class="font-label-caps text-label-caps text-primary uppercase truncate font-semibold">6. Action</span>
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface truncate">RETRY_NUDGE</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Main Workstation Layout: 2-Column Split -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-space-xl items-start">
+<!-- LEFT COLUMN: Payment Scenario Parameters (~45%) -->
+<div class="lg:col-span-5 flex flex-col gap-space-lg">
+<div class="bg-surface-container-low rounded-xl p-space-lg shadow-xl flex flex-col gap-space-lg">
+<!-- Header & Preset Scenario Selector -->
+<div class="flex flex-col gap-space-sm">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-primary text-[20px]">tune</span>
+<h2 class="font-headline-sm text-headline-sm text-on-surface">Payment Scenario</h2>
+</div>
+<span class="font-label-badge text-label-badge text-on-surface-variant bg-surface-container px-space-xs py-space-2xs rounded">MANDATE ENGINE</span>
+</div>
+<!-- Scenario Pills -->
+<div class="flex items-center gap-space-xs pt-space-xs overflow-x-auto">
+<button class="scenario-pill active-scenario px-space-sm py-space-2xs rounded-full font-mono-code-sm text-mono-code-sm bg-primary text-on-primary font-medium transition-all shadow-sm" id="scenario-btn-1" type="button">
+              Reliable Customer
+            </button>
+<button class="scenario-pill px-space-sm py-space-2xs rounded-full font-mono-code-sm text-mono-code-sm bg-surface-container text-on-surface-variant hover:text-on-surface transition-all" id="scenario-btn-2" type="button">
+              Chronic Failure
+            </button>
+<button class="scenario-pill px-space-sm py-space-2xs rounded-full font-mono-code-sm text-mono-code-sm bg-surface-container text-on-surface-variant hover:text-on-surface transition-all" id="scenario-btn-3" type="button">
+              Guardrail Override
+            </button>
+</div>
+</div>
+<!-- Form Inputs Grid -->
+<div class="flex flex-col gap-space-md">
+<!-- Row 1: Payment ID & Currency -->
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-md">
+<div class="flex flex-col gap-space-2xs">
+<label class="font-label-caps text-label-caps text-on-surface-variant uppercase">Payment ID</label>
+<div class="flex items-center justify-between bg-surface px-space-sm py-space-xs rounded shadow-sm">
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface truncate" id="payment-id-val">pay_982xK10887mQ</span>
+<button class="text-on-surface-variant hover:text-primary transition-colors p-1" onclick="navigator.clipboard.writeText('pay_982xK10887mQ')" title="Copy Identifier" type="button">
+<span class="material-symbols-outlined text-[16px]">content_copy</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col gap-space-2xs">
+<label class="font-label-caps text-label-caps text-on-surface-variant uppercase">Amount (INR)</label>
+<div class="flex items-center bg-surface px-space-sm py-space-xs rounded shadow-sm">
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface-variant mr-space-xs">₹</span>
+<input class="w-full bg-transparent font-mono-code-sm text-mono-code-sm text-on-surface focus:outline-none" id="amount-input" type="text" value="12,450.00"/>
+</div>
+</div>
+</div>
+<!-- Row 2: Attempt Number & Dynamic Success Rate -->
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-md">
+<div class="flex flex-col gap-space-2xs">
+<label class="font-label-caps text-label-caps text-on-surface-variant uppercase">Attempt Sequence</label>
+<div class="flex items-center bg-surface px-space-sm py-space-xs rounded shadow-sm">
+<span class="material-symbols-outlined text-on-surface-variant text-[16px] mr-space-xs">history</span>
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface font-medium">2 of 4</span>
+<span class="font-label-badge text-label-badge text-secondary ml-auto bg-secondary-container/20 px-space-xs py-space-2xs rounded">Retry #2</span>
+</div>
+</div>
+<div class="flex flex-col gap-space-2xs">
+<div class="flex items-center justify-between">
+<label class="font-label-caps text-label-caps text-on-surface-variant uppercase">Dynamic Success Rate</label>
+<span class="font-mono-code-sm text-mono-code-sm text-primary font-medium" id="rate-display">42.5%</span>
+</div>
+<div class="flex items-center h-9 px-space-sm bg-surface rounded">
+<input class="w-full accent-primary cursor-pointer" id="rate-slider" max="95" min="5" oninput="document.getElementById('rate-display').innerText = this.value + '%'" step="0.5" type="range" value="42.5"/>
+</div>
+</div>
+</div>
+<!-- Row 3: Failure Counts Metrics -->
+<div class="grid grid-cols-2 gap-space-md">
+<div class="bg-surface p-space-sm rounded shadow-sm flex flex-col">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Cumulative Failures</span>
+<span class="font-mono-metric-md text-mono-metric-md text-on-surface mt-space-2xs">1</span>
+</div>
+<div class="bg-surface p-space-sm rounded shadow-sm flex flex-col">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Consecutive Cycles</span>
+<span class="font-mono-metric-md text-mono-metric-md text-primary mt-space-2xs">0</span>
+</div>
+</div>
+<!-- Row 4: Engagement & Contact -->
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-md">
+<div class="flex flex-col gap-space-2xs">
+<label class="font-label-caps text-label-caps text-on-surface-variant uppercase">Notification Engagement</label>
+<div class="bg-surface px-space-sm py-space-xs rounded flex items-center justify-between">
+<span class="font-body-sm text-body-sm text-on-surface">High (4m open)</span>
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+</div>
+</div>
+<div class="flex flex-col gap-space-2xs">
+<label class="font-label-caps text-label-caps text-on-surface-variant uppercase">Contact Channels</label>
+<div class="bg-surface px-space-sm py-space-xs rounded flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-secondary text-[16px]">chat</span>
+<span class="font-body-sm text-body-sm text-on-surface">WhatsApp &amp; SMS</span>
+</div>
+</div>
+</div>
+<!-- Row 5: Payment Method Segmented Toggle -->
+<div class="flex flex-col gap-space-2xs">
+<label class="font-label-caps text-label-caps text-on-surface-variant uppercase">Payment Method</label>
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-space-xs bg-surface p-space-2xs rounded">
+<button class="py-space-xs rounded font-label-caps text-label-caps uppercase text-center bg-surface-container-highest text-on-surface font-semibold shadow-sm" type="button">
+                UPI AutoPay
+              </button>
+<button class="py-space-xs rounded font-label-caps text-label-caps uppercase text-center text-on-surface-variant hover:text-on-surface transition-colors" type="button">
+                Card Mandate
+              </button>
+<button class="py-space-xs rounded font-label-caps text-label-caps uppercase text-center text-on-surface-variant hover:text-on-surface transition-colors" type="button">
+                NetBanking
+              </button>
+<button class="py-space-xs rounded font-label-caps text-label-caps uppercase text-center text-on-surface-variant hover:text-on-surface transition-colors" type="button">
+                eNACH
+              </button>
+</div>
+</div>
+<!-- Row 6: Failure Reason Selector -->
+<div class="flex flex-col gap-space-2xs">
+<label class="font-label-caps text-label-caps text-on-surface-variant uppercase">Failure Reason Code</label>
+<div class="bg-surface px-space-sm py-space-xs rounded flex items-center justify-between shadow-sm">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-tertiary text-[18px]">warning</span>
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface">INSUFFICIENT_FUNDS_TRANSIENT</span>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">expand_more</span>
+</div>
+</div>
+</div>
+<!-- Buttons Section -->
+<div class="flex flex-col gap-space-sm pt-space-xs">
+<button class="w-full py-space-sm px-space-md bg-primary hover:bg-primary-container text-on-primary font-headline-sm text-headline-sm rounded flex items-center justify-center gap-space-xs shadow-md transition-all" id="eval-action-btn" type="button">
+<span class="material-symbols-outlined text-[20px] animate-pulse">refresh</span>
+<span>EVALUATE PAYMENT</span>
+</button>
+<div class="grid grid-cols-2 gap-space-sm">
+<button class="py-space-xs px-space-sm bg-surface-container hover:bg-surface-container-high text-on-surface font-label-caps text-label-caps uppercase rounded text-center transition-colors" type="button">
+              REPEAT SAME REQUEST
+            </button>
+<button class="py-space-xs px-space-sm bg-surface-container hover:bg-surface-container-high text-on-surface font-label-caps text-label-caps uppercase rounded text-center transition-colors" onclick="document.getElementById('amount-input').value = '7,500.00'" type="button">
+              CHANGE AMOUNT → ₹7,500
+            </button>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant text-center mt-space-2xs flex items-center justify-center gap-space-2xs">
+<span class="material-symbols-outlined text-secondary text-[14px]">info</span>
+            Live evaluation uses the deployed Recovery Intelligence API.
+          </p>
+</div>
+<!-- Interactive States Preview Toggle Bar -->
+<div class="pt-space-sm mt-space-xs bg-surface-container p-space-sm rounded">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block mb-space-xs">Interactive Engine State Previews:</span>
+<div class="flex items-center gap-space-xs flex-wrap">
+<button class="px-space-xs py-space-2xs rounded font-label-caps text-label-caps bg-primary/20 text-primary font-medium" type="button">Success (Active)</button>
+<button class="px-space-xs py-space-2xs rounded font-label-caps text-label-caps bg-surface text-on-surface-variant hover:text-on-surface" type="button">Cache Hit</button>
+<button class="px-space-xs py-space-2xs rounded font-label-caps text-label-caps bg-surface text-on-surface-variant hover:text-on-surface" type="button">Model Fallback</button>
+<button class="px-space-xs py-space-2xs rounded font-label-caps text-label-caps bg-surface text-on-surface-variant hover:text-on-surface" type="button">Guardrail Override</button>
+<button class="px-space-xs py-space-2xs rounded font-label-caps text-label-caps bg-surface text-on-surface-variant hover:text-on-surface" type="button">Evaluating...</button>
+</div>
+</div>
+</div>
+</div>
+<!-- RIGHT COLUMN: Decision Result & Governance Card (~55%) -->
+<div class="lg:col-span-7 flex flex-col gap-space-lg">
+<!-- HERO DECISION BANNER CARD -->
+<div class="relative overflow-hidden bg-surface-container-low rounded-xl p-space-lg shadow-xl">
+<!-- Background Radial Glow -->
+<div class="absolute top-0 right-0 w-80 h-80 bg-primary/10 rounded-full blur-3xl pointer-events-none"></div>
+<div class="relative z-10 flex flex-col gap-space-md">
+<!-- Top Row: Request ID & Badges -->
+<div class="flex items-center justify-between flex-wrap gap-space-xs">
+<div class="flex items-center gap-space-xs">
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface-variant">REQ:</span>
+<span class="font-mono-code-sm text-mono-code-sm text-secondary font-medium">req_causal_8829fba1</span>
+<span class="text-on-surface-variant text-body-sm font-body-sm">• Just now</span>
+</div>
+<div class="flex items-center gap-space-xs">
+<span class="px-space-xs py-space-2xs rounded font-mono-code-sm text-mono-code-sm bg-secondary-container/20 text-secondary font-medium flex items-center gap-space-2xs">
+<span class="material-symbols-outlined text-[14px]">auto_awesome</span> LLM REASONING ✓
+              </span>
+<span class="px-space-xs py-space-2xs rounded font-mono-code-sm text-mono-code-sm bg-surface-container text-on-surface-variant">
+                CACHE HIT: 0ms
+              </span>
+<span class="px-space-xs py-space-2xs rounded font-mono-code-sm text-mono-code-sm bg-primary/20 text-primary font-medium">
+                GUARDRAIL: PASSED
+              </span>
+</div>
+</div>
+<!-- Giant Prominent Action Badge -->
+<div class="bg-surface p-space-lg rounded-xl shadow-inner flex flex-col md:flex-row md:items-center justify-between gap-space-md">
+<div>
+<span class="font-label-caps text-label-caps text-primary uppercase tracking-wider block mb-space-2xs">Orchestration Resolution</span>
+<div class="font-display-lg text-display-lg text-primary tracking-tight font-bold flex items-center gap-space-sm">
+<span>FINAL ACTION: RETRY_NUDGE</span>
+<span class="material-symbols-outlined text-primary text-[32px]">check_circle</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-space-2xs">
+                Scheduled dual-channel ping (WhatsApp/SMS) followed by gateway submission at +30m.
+              </p>
+</div>
+<div class="shrink-0 flex items-center justify-end">
+<!-- Radial Meter SVG inline for Confidence -->
+<div class="relative w-20 h-20 flex items-center justify-center">
+<svg class="w-full h-full transform -rotate-90" viewbox="0 0 36 36">
+<path class="text-surface-container" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3.5"></path>
+<path class="text-primary" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="95, 100" stroke-linecap="round" stroke-width="3.5"></path>
+</svg>
+<div class="absolute flex flex-col items-center">
+<span class="font-mono-metric-md text-mono-metric-md text-on-surface font-semibold">95%</span>
+<span class="font-label-badge text-label-badge text-on-surface-variant uppercase">CONF</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Key Metrics Row -->
+<div class="grid grid-cols-3 gap-space-sm">
+<div class="bg-surface p-space-sm rounded">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block">Recovery Probability</span>
+<div class="flex items-center gap-space-xs mt-space-2xs">
+<span class="font-mono-metric-lg text-mono-metric-lg text-primary">77.8%</span>
+<span class="text-primary text-[14px] material-symbols-outlined">trending_up</span>
+</div>
+</div>
+<div class="bg-surface p-space-sm rounded">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block">Calculated Risk</span>
+<div class="flex items-center gap-space-xs mt-space-2xs">
+<span class="px-space-sm py-space-2xs bg-secondary-container/20 text-secondary rounded font-mono-code-sm text-mono-code-sm font-semibold uppercase">Medium (0.22)</span>
+</div>
+</div>
+<div class="bg-surface p-space-sm rounded">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block">Decision Source</span>
+<div class="flex items-center gap-space-xs mt-space-2xs">
+<span class="px-space-sm py-space-2xs bg-surface-container-high text-on-surface rounded font-mono-code-sm text-mono-code-sm font-medium">LLM (Governed)</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- GOVERNANCE & POLICY ALIGNMENT GRID -->
+<div class="bg-surface-container-low rounded-xl p-space-lg shadow-xl flex flex-col gap-space-md">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-secondary text-[20px]">policy</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Governance &amp; Policy Alignment</h3>
+</div>
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">MULTI-TIER VALIDATION</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-space-sm">
+<!-- Model Raw Output -->
+<div class="bg-surface p-space-sm rounded flex flex-col justify-between">
+<div>
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block mb-space-2xs">Raw Causal Model Decision</span>
+<span class="font-mono-metric-md text-mono-metric-md text-on-surface">RETRY</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant mt-space-xs">Direct API recommendation based purely on tabular loss function.</span>
+</div>
+<!-- LLM Synthesis Output -->
+<div class="bg-surface p-space-sm rounded flex flex-col justify-between">
+<div>
+<span class="font-label-caps text-label-caps text-secondary uppercase block mb-space-2xs">Synthesized LLM Decision</span>
+<span class="font-mono-metric-md text-mono-metric-md text-secondary">RETRY_NUDGE</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant mt-space-xs">Augmented with low-friction SMS notification prior to attempt execution.</span>
+</div>
+<!-- Guardrail Status -->
+<div class="bg-surface p-space-sm rounded flex flex-col justify-between">
+<div>
+<span class="font-label-caps text-label-caps text-primary uppercase block mb-space-2xs">Guardrail Status</span>
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-primary text-[18px]">verified</span>
+<span class="font-mono-code-sm text-mono-code-sm text-primary font-medium">PASSED (Rule #14)</span>
+</div>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant mt-space-xs">Constraint: Max 3 retries in 48h respected (Attempt is #2).</span>
+</div>
+<!-- Guardrail Reasoning Context -->
+<div class="bg-surface p-space-sm rounded flex flex-col justify-between">
+<div>
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block mb-space-2xs">Guardrail Context</span>
+<span class="font-body-sm text-body-sm text-on-surface font-medium">High transient balance replenishment</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant mt-space-xs">Customer demonstrates 84% UPI account refill probability within 6 hours.</span>
+</div>
+</div>
+</div>
+<!-- DECISION ECONOMICS CARD -->
+<div class="bg-surface-container-low rounded-xl p-space-lg shadow-xl flex flex-col gap-space-md">
+<div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-primary text-[20px]">query_stats</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Decision Economics</h3>
+</div>
+<span class="font-label-caps text-label-caps text-primary uppercase">Optimized Net Recovery</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-space-2xs">Highest expected net value calculated across all permitted actions.</p>
+</div>
+<!-- 3-metric KPI Row -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-space-sm">
+<div class="bg-surface p-space-sm rounded">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block">Expected Recovery</span>
+<span class="font-mono-metric-lg text-mono-metric-lg text-on-surface mt-space-2xs block">₹5,830</span>
+<span class="font-label-badge text-label-badge text-on-surface-variant uppercase block mt-space-2xs">Gross recovery pool</span>
+</div>
+<div class="bg-surface p-space-sm rounded">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block">Net Value</span>
+<span class="font-mono-metric-lg text-mono-metric-lg text-primary mt-space-2xs block">+₹4,912</span>
+<span class="font-label-badge text-label-badge text-primary uppercase block mt-space-2xs">After gateway &amp; SMS overhead</span>
+</div>
+<div class="bg-surface p-space-sm rounded">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase block">Opportunity Cost</span>
+<span class="font-mono-metric-lg text-mono-metric-lg text-secondary mt-space-2xs block">+₹812</span>
+<span class="font-label-badge text-label-badge text-secondary uppercase block mt-space-2xs">Uplift vs Pure Retry</span>
+</div>
+</div>
+<!-- Action Comparison Value Bars (Clean without excess chart libraries) -->
+<div class="flex flex-col gap-space-xs pt-space-xs">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase mb-space-2xs block">Permitted Actions Value Spectrum:</span>
+<!-- Bar 1: Selected RETRY_NUDGE -->
+<div class="bg-surface p-space-sm rounded flex flex-col gap-space-xs">
+<div class="flex items-center justify-between">
+<span class="font-mono-code-sm text-mono-code-sm text-primary font-semibold flex items-center gap-space-xs">
+<span class="w-1.5 h-1.5 rounded-full bg-primary"></span> RETRY_NUDGE (Selected)
+              </span>
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface font-medium">₹5,830 gross / <span class="text-primary">+₹4,912 net</span></span>
+</div>
+<div class="w-full bg-surface-container-highest h-2 rounded overflow-hidden">
+<div class="bg-primary h-full rounded" style="width: 85%;"></div>
+</div>
+</div>
+<!-- Bar 2: PURE_RETRY -->
+<div class="bg-surface p-space-sm rounded flex flex-col gap-space-xs">
+<div class="flex items-center justify-between">
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface flex items-center gap-space-xs">
+<span class="w-1.5 h-1.5 rounded-full bg-outline"></span> PURE_RETRY
+              </span>
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface-variant">₹4,100 gross / +₹4,100 net</span>
+</div>
+<div class="w-full bg-surface-container-highest h-2 rounded overflow-hidden">
+<div class="bg-surface-tint/60 h-full rounded" style="width: 60%;"></div>
+</div>
+</div>
+<!-- Bar 3: CALL_ESCALATION -->
+<div class="bg-surface p-space-sm rounded flex flex-col gap-space-xs">
+<div class="flex items-center justify-between">
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface flex items-center gap-space-xs">
+<span class="w-1.5 h-1.5 rounded-full bg-outline"></span> CALL_ESCALATION
+              </span>
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface-variant">₹2,200 gross / <span class="text-tertiary">-₹140 net (Agent Cost)</span></span>
+</div>
+<div class="w-full bg-surface-container-highest h-2 rounded overflow-hidden">
+<div class="bg-tertiary/60 h-full rounded" style="width: 32%;"></div>
+</div>
+</div>
+<!-- Bar 4: PASSIVE_WAIT -->
+<div class="bg-surface p-space-sm rounded flex flex-col gap-space-xs">
+<div class="flex items-center justify-between">
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface flex items-center gap-space-xs">
+<span class="w-1.5 h-1.5 rounded-full bg-outline"></span> PASSIVE_WAIT
+              </span>
+<span class="font-mono-code-sm text-mono-code-sm text-on-surface-variant">₹640 gross / +₹640 net</span>
+</div>
+<div class="w-full bg-surface-container-highest h-2 rounded overflow-hidden">
+<div class="bg-outline-variant h-full rounded" style="width: 10%;"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- WHY THIS DECISION? LLM REASONING CARD -->
+<div class="bg-surface-container-low rounded-xl p-space-lg shadow-xl flex flex-col gap-space-md">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-secondary text-[22px]">psychology</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface">Why this decision?</h3>
+</div>
+<span class="px-space-xs py-space-2xs bg-secondary-container/20 text-secondary rounded font-label-caps text-label-caps uppercase">Synthesized Causal Rationale</span>
+</div>
+<div class="bg-surface p-space-md rounded-lg flex flex-col gap-space-sm">
+<p class="font-body-md text-body-md text-on-surface leading-relaxed">
+<span class="font-mono-code-sm text-mono-code-sm text-primary font-semibold">RETRY_NUDGE</span> yields the highest expected net value among permitted actions (<span class="font-mono-code-sm text-mono-code-sm text-primary font-semibold">+₹4,912</span>). The customer exhibits a <span class="font-mono-code-sm text-mono-code-sm text-on-surface font-semibold">77.8%</span> recovery probability given high historical notification engagement and transient insufficient funds on UPI AutoPay.
+          </p>
+<p class="font-body-md text-body-md text-on-surface-variant leading-relaxed">
+            Immediate retry without notification carries a 48% failure rate; introducing an automated WhatsApp/SMS payment alert 30 minutes prior increases recovery odds by <span class="text-primary font-medium">+29.8%</span> while staying well within the maximum retry quota of 4 attempts (currently at Attempt 2).
+          </p>
+<div class="flex items-center gap-space-md pt-space-xs mt-space-xs">
+<div class="flex items-center gap-space-xs font-mono-code-sm text-mono-code-sm text-on-surface-variant">
+<span class="material-symbols-outlined text-primary text-[16px]">done_all</span>
+<span>Validated against ISO 20022 message codes</span>
+</div>
+<div class="flex items-center gap-space-xs font-mono-code-sm text-mono-code-sm text-on-surface-variant">
+<span class="material-symbols-outlined text-secondary text-[16px]">lock</span>
+<span>Non-repudiable audit lock #9012</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Interactive Client-side Scripting -->
+<script>
+    (function() {
+      const scenarioButtons = document.querySelectorAll('.scenario-pill');
+      const evalBtn = document.getElementById('eval-action-btn');
+      const amountInput = document.getElementById('amount-input');
+      const paymentIdVal = document.getElementById('payment-id-val');
+      const rateSlider = document.getElementById('rate-slider');
+      const rateDisplay = document.getElementById('rate-display');
+
+      const scenarios = {
+        'scenario-btn-1': {
+          id: 'pay_982xK10887mQ',
+          amount: '12,450.00',
+          rate: 42.5
+        },
+        'scenario-btn-2': {
+          id: 'pay_331bA99214zX',
+          amount: '4,200.00',
+          rate: 18.2
+        },
+        'scenario-btn-3': {
+          id: 'pay_772jM81002kL',
+          amount: '38,900.00',
+          rate: 82.0
+        }
+      };
+
+      scenarioButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+          scenarioButtons.forEach(b => {
+            b.classList.remove('bg-primary', 'text-on-primary', 'font-medium');
+            b.classList.add('bg-surface-container', 'text-on-surface-variant');
+          });
+          btn.classList.remove('bg-surface-container', 'text-on-surface-variant');
+          btn.classList.add('bg-primary', 'text-on-primary', 'font-medium');
+
+          const data = scenarios[btn.id];
+          if (data) {
+            paymentIdVal.textContent = data.id;
+            amountInput.value = data.amount;
+            rateSlider.value = data.rate;
+            rateDisplay.textContent = data.rate + '%';
+          }
+        });
+      });
+
+      if (evalBtn) {
+        evalBtn.addEventListener('click', () => {
+          const originalHTML = evalBtn.innerHTML;
+          evalBtn.innerHTML = '<span class="material-symbols-outlined text-[20px] animate-spin">sync</span><span>EVALUATING CAUSAL GRAPH...</span>';
+          evalBtn.disabled = true;
+
+          setTimeout(() => {
+            evalBtn.innerHTML = originalHTML;
+            evalBtn.disabled = false;
+          }, 450);
+        });
+      }
+    })();
+  </script>
+</div></main><footer class="w-full border-t border-surface-container-high bg-surface-container-lowest py-space-lg mt-space-2xl"><div class="max-w-[1440px] mx-auto px-gutter-desktop flex items-center justify-between font-mono-code-sm text-mono-code-sm text-on-surface-variant"><div>RECOVERY INTELLIGENCE ENGINE • DETERMINISTIC RECOVERY ORCHESTRATION</div><div class="flex items-center gap-space-lg"><span class="flex items-center gap-space-2xs"><span class="h-1.5 w-1.5 rounded-full bg-primary"></span>SOC2 TYPE II AUDITED</span><span>SLO: 99.995%</span></div></div></footer></body></html>
