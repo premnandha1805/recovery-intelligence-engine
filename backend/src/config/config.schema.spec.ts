@@ -59,4 +59,18 @@ describe('ConfigValidationSchema', () => {
     expect(error).toBeDefined();
     expect(error?.message).toContain('"HEALTH_CHECK_TIMEOUT_MS" must be a number');
   });
+
+  it('should accept valid FRONTEND_ORIGIN uri', () => {
+    const input = { FRONTEND_ORIGIN: 'https://recovery-frontend.onrender.com' };
+    const { error, value } = configValidationSchema.validate(input, { abortEarly: false });
+    expect(error).toBeUndefined();
+    expect(value.FRONTEND_ORIGIN).toBe('https://recovery-frontend.onrender.com');
+  });
+
+  it('should fail fast on malformed FRONTEND_ORIGIN', () => {
+    const input = { FRONTEND_ORIGIN: 'not-a-valid-uri' };
+    const { error } = configValidationSchema.validate(input, { abortEarly: false });
+    expect(error).toBeDefined();
+    expect(error?.message).toContain('"FRONTEND_ORIGIN" must be a valid uri');
+  });
 });

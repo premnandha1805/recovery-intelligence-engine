@@ -5,6 +5,7 @@ export interface AppConfig {
   DECISION_ENGINE_URL: string;
   DECISION_ENGINE_TIMEOUT_MS: number;
   HEALTH_CHECK_TIMEOUT_MS: number;
+  FRONTEND_ORIGIN?: string;
 }
 
 export const configValidationSchema = Joi.object({
@@ -20,4 +21,7 @@ export const configValidationSchema = Joi.object({
     .integer()
     .positive()
     .default(1000),
+  FRONTEND_ORIGIN: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .optional(),
 });

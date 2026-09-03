@@ -4,10 +4,22 @@ import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { getCorsConfig } from './common/cors.config';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
+
+  const configService = app.get(ConfigService);
+  const frontendOrigin = configService.get<string>('FRONTEND_ORIGIN');
+
+  // Narrowly-scoped CORS: allow configured production frontend origin & local dev origins only
+  app.enableCors(getCorsConfig(frontendOrigin));
+  logger.log(
+    `CORS configured for development origins and production origin: ${
+      frontendOrigin || 'none (FRONTEND_ORIGIN not set)'
+    }`,
+  );
 
   // Global ValidationPipe: strict DTO whitelisting to reject undeclared client fields [FIX-6]
   app.useGlobalPipes(
@@ -46,7 +58,6 @@ async function bootstrap() {
     customSiteTitle: 'Recovery Intelligence Engine API Documentation',
   });
 
-  const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT', 3000);
 
   await app.listen(port);
