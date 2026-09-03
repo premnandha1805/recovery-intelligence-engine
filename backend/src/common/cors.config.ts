@@ -13,6 +13,7 @@ export function getCorsConfig(frontendOrigin?: string): CorsOptions {
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'http://localhost:3000',
+    'https://recovery-intelligence-engine-1.onrender.com',
   ];
 
   if (frontendOrigin && frontendOrigin.trim() !== '') {
