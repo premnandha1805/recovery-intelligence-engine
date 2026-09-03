@@ -10,6 +10,7 @@ import {
   DecisionEngineAdapter,
   PythonDecisionResult,
 } from '../decision-engine/decision-engine.adapter';
+import { DecisionEngineService } from '../decision-engine/decision-engine.service';
 
 describe('CORS Configuration', () => {
   describe('getCorsConfig Unit Tests', () => {
@@ -84,6 +85,10 @@ describe('CORS Configuration', () => {
         .useValue({
           evaluate: jest.fn().mockResolvedValue(mockPythonDecision),
           getTimeoutMs: jest.fn().mockReturnValue(8000),
+        })
+        .overrideProvider(DecisionEngineService)
+        .useValue({
+          checkHealth: jest.fn().mockResolvedValue('ok'),
         })
         .compile();
 
