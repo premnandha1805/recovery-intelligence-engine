@@ -12,6 +12,9 @@ __pycache__
 *.py[cod]
 *$py.class
 .pytest_cache
+.mypy_cache
+.coverage
+htmlcov
 
 # Environment variables & secrets
 .env
@@ -23,6 +26,8 @@ __pycache__
 logs
 decision_engine/*.db
 decision_engine/audit.db
+*.sqlite
+*.sqlite3
 
 # Backend & simulator & evaluation runs
 backend
