@@ -176,13 +176,13 @@ export const LiveDecisionTab: React.FC<LiveDecisionTabProps> = ({
     <div className="flex flex-col w-full text-on-surface">
       {/* ── Page Header & Architecture Line ──────────────────────────────── */}
       <div className="flex flex-col mb-space-lg">
-        <h1 className="font-display-lg text-[28px] text-on-surface font-semibold tracking-tight">
+        <h1 className="font-display-lg text-[22px] sm:text-[28px] text-on-surface font-semibold tracking-tight">
           Recovery Intelligence Engine
         </h1>
-        <p className="font-body-md text-on-surface-variant mt-1">
+        <p className="font-body-md text-on-surface-variant mt-1 text-[13px] sm:text-[14px]">
           Causal recovery decisions for failed payments
         </p>
-        <div className="flex items-center gap-space-xs font-mono-code-sm text-[12px] text-on-surface-variant/80 mt-2 flex-wrap">
+        <div className="flex items-center gap-space-xs font-mono-code-sm text-[11px] sm:text-[12px] text-on-surface-variant/80 mt-2 flex-wrap">
           <span className="text-secondary font-medium">Observable features</span>
           <span>→</span>
           <span className="text-on-surface">causal policy</span>
@@ -247,7 +247,7 @@ export const LiveDecisionTab: React.FC<LiveDecisionTabProps> = ({
             </div>
 
             {/* Presets */}
-            <div className="flex items-center gap-space-xs">
+            <div className="flex items-center gap-1.5 sm:gap-space-xs flex-wrap">
               <button
                 type="button"
                 onClick={() => applyPreset('reliable')}
@@ -406,13 +406,13 @@ export const LiveDecisionTab: React.FC<LiveDecisionTabProps> = ({
               {/* Payment Method */}
               <div className="flex flex-col gap-1">
                 <label className="font-label-caps text-[11px] text-on-surface-variant uppercase">Payment Method</label>
-                <div className="grid grid-cols-4 gap-1 bg-surface p-1 rounded border border-surface-container-high/40">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 bg-surface p-1 rounded border border-surface-container-high/40">
                   {(['upi', 'card', 'netbanking', 'wallet'] as const).map((m) => (
                     <button
                       key={m}
                       type="button"
                       onClick={() => setPaymentMethod(m)}
-                      className={`py-1 text-[11px] font-label-caps uppercase rounded transition-colors cursor-pointer text-center ${
+                      className={`py-1.5 sm:py-1 text-[11px] font-label-caps uppercase rounded transition-colors cursor-pointer text-center ${
                         paymentMethod === m
                           ? 'bg-surface-container-highest text-on-surface font-semibold shadow-sm'
                           : 'text-on-surface-variant hover:text-on-surface'
@@ -455,7 +455,7 @@ export const LiveDecisionTab: React.FC<LiveDecisionTabProps> = ({
                 <span>{evaluating ? 'Evaluating Causal Policy...' : 'Evaluate Payment'}</span>
               </button>
 
-              <div className="grid grid-cols-2 gap-space-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-xs">
                 <button
                   type="button"
                   disabled={evaluating}
@@ -486,40 +486,40 @@ export const LiveDecisionTab: React.FC<LiveDecisionTabProps> = ({
         {/* RIGHT COLUMN: Decision Result & Why This Decision? */}
         <div className="lg:col-span-7 flex flex-col gap-space-md">
           {/* Main Decision Result Card (Visual Focal Point) */}
-          <div className="bg-surface-container-low rounded-xl p-space-lg shadow-sm border border-surface-container-high/60 flex flex-col gap-space-md">
+          <div className="bg-surface-container-low rounded-xl p-space-md sm:p-space-lg shadow-sm border border-surface-container-high/60 flex flex-col gap-space-md">
             {/* Top Row: Request ID & Meta */}
             <div className="flex items-center justify-between flex-wrap gap-space-xs">
-              <div className="flex items-center gap-space-xs font-mono-code-sm text-[12px] text-on-surface-variant">
+              <div className="flex items-center gap-space-xs font-mono-code-sm text-[11px] sm:text-[12px] text-on-surface-variant">
                 <span>REQ:</span>
-                <span className="text-secondary font-medium truncate max-w-[220px]">
+                <span className="text-secondary font-medium truncate max-w-[160px] sm:max-w-[220px]">
                   {currentResult?.request_id || 'req_causal_8829fba1'}
                 </span>
               </div>
-              <div className="flex items-center gap-space-xs">
-                <span className="px-space-xs py-0.5 rounded font-mono-code-sm text-[11px] bg-surface-container text-on-surface-variant">
+              <div className="flex items-center gap-space-xs flex-wrap">
+                <span className="px-space-xs py-0.5 rounded font-mono-code-sm text-[10px] sm:text-[11px] bg-surface-container text-on-surface-variant">
                   Source: {currentResult?.decision_source || (isCache ? 'cache' : 'llm')}
                 </span>
-                <span className={`px-space-xs py-0.5 rounded font-mono-code-sm text-[11px] font-medium ${isOverridden ? 'bg-error-container/40 text-error' : 'bg-primary/20 text-primary'}`}>
+                <span className={`px-space-xs py-0.5 rounded font-mono-code-sm text-[10px] sm:text-[11px] font-medium ${isOverridden ? 'bg-error-container/40 text-error' : 'bg-primary/20 text-primary'}`}>
                   Guardrails: {isOverridden ? 'OVERRIDDEN' : 'PASSED'}
                 </span>
               </div>
             </div>
 
             {/* Prominent Action Banner */}
-            <div className="bg-surface p-space-md rounded-xl border border-surface-container-high/40 flex items-center justify-between">
+            <div className="bg-surface p-space-md rounded-xl border border-surface-container-high/40 flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm">
               <div>
-                <span className="font-label-caps text-[11px] text-on-surface-variant uppercase tracking-wider block mb-1">
+                <span className="font-label-caps text-[10px] sm:text-[11px] text-on-surface-variant uppercase tracking-wider block mb-1">
                   Recommended Recovery Action
                 </span>
-                <div className={`font-display-lg text-[26px] font-bold tracking-tight flex items-center gap-space-xs ${isOverridden ? 'text-error' : 'text-primary'}`}>
+                <div className={`font-display-lg text-[20px] sm:text-[26px] font-bold tracking-tight flex items-center gap-space-xs flex-wrap ${isOverridden ? 'text-error' : 'text-primary'}`}>
                   <span>FINAL ACTION: {currentResult?.final_action || (isOverridden ? 'STOP' : 'RETRY_NUDGE')}</span>
-                  <span className="material-symbols-outlined text-[26px]">
+                  <span className="material-symbols-outlined text-[22px] sm:text-[26px]">
                     {isOverridden ? 'cancel' : 'check_circle'}
                   </span>
                 </div>
               </div>
-              <div className="flex flex-col items-end justify-center pl-space-md border-l border-surface-container-high">
-                <span className="font-mono-metric-lg text-[22px] font-bold text-on-surface">
+              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center pt-2 sm:pt-0 pl-0 sm:pl-space-md border-t sm:border-t-0 sm:border-l border-surface-container-high">
+                <span className="font-mono-metric-lg text-[18px] sm:text-[22px] font-bold text-on-surface">
                   {confidencePct}%
                 </span>
                 <span className="font-label-caps text-[10px] text-on-surface-variant uppercase">
@@ -529,7 +529,7 @@ export const LiveDecisionTab: React.FC<LiveDecisionTabProps> = ({
             </div>
 
             {/* 3 Real Metric Boxes */}
-            <div className="grid grid-cols-3 gap-space-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-space-sm">
               <div className="bg-surface p-space-sm rounded border border-surface-container-high/40">
                 <span className="font-label-caps text-[10px] text-on-surface-variant uppercase block">Calculated Risk</span>
                 <span className={`font-mono-code-sm text-[13px] font-semibold mt-1 block uppercase ${currentResult?.risk_level === 'high' ? 'text-error' : currentResult?.risk_level === 'low' ? 'text-primary' : 'text-secondary'}`}>

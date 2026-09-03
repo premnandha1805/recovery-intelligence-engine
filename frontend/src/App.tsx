@@ -31,7 +31,7 @@ export const App: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="w-full pt-16 max-w-[1440px] mx-auto px-gutter-desktop flex-1 flex flex-col py-space-xl">
+      <main className="w-full pt-16 max-w-[1440px] mx-auto px-4 sm:px-gutter-desktop flex-1 flex flex-col py-5 sm:py-space-xl">
         {activeTab === 'live' && (
           <LiveDecisionTab
             onAddAuditRecord={handleAddAuditRecord}
@@ -55,7 +55,7 @@ export const App: React.FC = () => {
 
       {/* Clean Minimal Footer */}
       <footer className="w-full border-t border-surface-container-high bg-surface-container-lowest py-space-md">
-        <div className="max-w-[1440px] mx-auto px-gutter-desktop flex flex-col sm:flex-row items-center justify-between gap-2 font-mono-code-sm text-[12px] text-on-surface-variant">
+        <div className="max-w-[1440px] mx-auto px-4 sm:px-gutter-desktop flex flex-col sm:flex-row items-center justify-between gap-2 font-mono-code-sm text-[11px] sm:text-[12px] text-on-surface-variant text-center sm:text-left">
           <div>Recovery Intelligence Engine • Causal Payment Recovery</div>
           <div className="text-on-surface-variant/70">
             Offline Policy Evaluation &amp; Online Decision Gateway

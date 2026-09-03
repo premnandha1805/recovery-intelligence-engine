@@ -86,17 +86,17 @@ export const AuditTrailTab: React.FC<AuditTrailTabProps> = ({ auditRecords }) =>
     <div className="flex flex-col w-full text-on-surface">
       {/* ── Page Header ──────────────────────────────────────────────────── */}
       <div className="flex flex-col mb-space-lg">
-        <h1 className="font-display-lg text-[28px] text-on-surface font-semibold tracking-tight">
+        <h1 className="font-display-lg text-[22px] sm:text-[28px] text-on-surface font-semibold tracking-tight">
           Audit Trail
         </h1>
-        <p className="font-body-md text-on-surface-variant mt-1">
+        <p className="font-body-md text-on-surface-variant mt-1 text-[13px] sm:text-[14px]">
           Every evaluated decision is persisted and traceable.
         </p>
       </div>
 
       {/* ── Architecture Card: Dual-Tier Storage ─────────────────────────── */}
-      <div className="bg-surface-container-low rounded-xl p-space-lg shadow-sm border border-surface-container-high/60 mb-space-xl">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-space-lg">
+      <div className="bg-surface-container-low rounded-xl p-space-md sm:p-space-lg shadow-sm border border-surface-container-high/60 mb-space-xl">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-space-md sm:gap-space-lg">
           {/* Current State Read Model */}
           <div className="flex flex-col gap-2 p-space-md bg-surface rounded-lg border border-surface-container-high/40">
             <div className="flex items-center justify-between">
@@ -136,7 +136,7 @@ export const AuditTrailTab: React.FC<AuditTrailTabProps> = ({ auditRecords }) =>
       </div>
 
       {/* ── Decision History Timeline ────────────────────────────────────── */}
-      <div className="bg-surface-container-low rounded-xl p-space-lg shadow-sm border border-surface-container-high/60 flex flex-col gap-space-md mb-space-xl">
+      <div className="bg-surface-container-low rounded-xl p-space-md sm:p-space-lg shadow-sm border border-surface-container-high/60 flex flex-col gap-space-md mb-space-xl">
         <div className="flex items-center justify-between pb-space-xs border-b border-surface-container-high/40">
           <h2 className="font-headline-sm text-[16px] text-on-surface font-semibold">
             Decision History
@@ -196,7 +196,7 @@ export const AuditTrailTab: React.FC<AuditTrailTabProps> = ({ auditRecords }) =>
                 </div>
 
                 {/* Right Metadata */}
-                <div className="flex items-center gap-space-md font-mono-code-sm text-[11px] text-on-surface-variant shrink-0 self-end sm:self-auto">
+                <div className="flex items-center gap-x-space-md gap-y-1 font-mono-code-sm text-[11px] text-on-surface-variant shrink-0 flex-wrap sm:self-auto pl-8 sm:pl-0">
                   <span>Source: {ev.decisionSource}</span>
                   <span>Confidence: {Math.round(ev.confidence * 100)}%</span>
                   <span className="text-on-surface-variant/70">{ev.time}</span>
@@ -208,8 +208,8 @@ export const AuditTrailTab: React.FC<AuditTrailTabProps> = ({ auditRecords }) =>
       </div>
 
       {/* ── Explanation Note ─────────────────────────────────────────────── */}
-      <div className="p-space-sm rounded-lg bg-surface-container-low border border-surface-container-high/60 text-on-surface-variant font-body-sm text-[12px] flex items-center gap-space-xs">
-        <span className="material-symbols-outlined text-[16px] text-secondary shrink-0">database</span>
+      <div className="p-space-sm rounded-lg bg-surface-container-low border border-surface-container-high/60 text-on-surface-variant font-body-sm text-[12px] flex items-start sm:items-center gap-space-xs">
+        <span className="material-symbols-outlined text-[16px] text-secondary shrink-0 mt-0.5 sm:mt-0">database</span>
         <span>
           Current-session history is shown here. Full decision history is persisted server-side in PostgreSQL.
         </span>

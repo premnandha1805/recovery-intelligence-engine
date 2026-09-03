@@ -75,10 +75,10 @@ export const PolicyComparisonTab: React.FC = () => {
     <div className="flex flex-col w-full text-on-surface">
       {/* ── Page Header ──────────────────────────────────────────────────── */}
       <div className="flex flex-col mb-space-lg">
-        <h1 className="font-display-lg text-[28px] text-on-surface font-semibold tracking-tight">
+        <h1 className="font-display-lg text-[22px] sm:text-[28px] text-on-surface font-semibold tracking-tight">
           Policy Comparison
         </h1>
-        <p className="font-body-md text-on-surface-variant mt-1">
+        <p className="font-body-md text-on-surface-variant mt-1 text-[13px] sm:text-[14px]">
           Offline evaluation of recovery policies
         </p>
       </div>
@@ -144,7 +144,7 @@ export const PolicyComparisonTab: React.FC = () => {
       </div>
 
       {/* ── Main Visualization: Net Value by Policy ──────────────────────── */}
-      <div className="bg-surface-container-low rounded-xl p-space-lg shadow-sm border border-surface-container-high/60 flex flex-col gap-space-md mb-space-xl">
+      <div className="bg-surface-container-low rounded-xl p-space-md sm:p-space-lg shadow-sm border border-surface-container-high/60 flex flex-col gap-space-md mb-space-xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-space-xs border-b border-surface-container-high/40">
           <div>
             <h2 className="font-headline-sm text-[16px] text-on-surface font-semibold">
@@ -163,8 +163,8 @@ export const PolicyComparisonTab: React.FC = () => {
         <div className="space-y-space-sm my-space-xs">
           {policies.map((p) => (
             <div key={p.name} className="flex flex-col gap-1">
-              <div className="flex items-center justify-between font-mono-code-sm text-[12px]">
-                <span className="font-medium text-on-surface flex items-center gap-space-xs">
+              <div className="flex flex-col xs:flex-row xs:items-center justify-between font-mono-code-sm text-[12px] gap-0.5 xs:gap-0">
+                <span className="font-medium text-on-surface flex items-center gap-space-xs flex-wrap">
                   <span>{p.name}</span>
                   {p.isWinner ? (
                     <span className="px-1.5 py-0.5 rounded bg-primary text-on-primary font-semibold text-[10px] uppercase">
@@ -195,7 +195,7 @@ export const PolicyComparisonTab: React.FC = () => {
           <div className="font-label-caps text-[11px] text-on-surface-variant uppercase mb-space-xs font-semibold">
             Evaluation Metrics Breakdown
           </div>
-          <table className="w-full text-left font-mono-code-sm text-[12px]">
+          <table className="w-full text-left font-mono-code-sm text-[12px] min-w-[580px]">
             <thead>
               <tr className="text-on-surface-variant font-label-caps text-[11px] uppercase border-b border-surface-container-high">
                 <th className="py-space-xs px-space-sm font-semibold">Policy Name</th>
@@ -229,9 +229,9 @@ export const PolicyComparisonTab: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Official Disclaimer ──────────────────────────────────────────── */}
-      <div className="p-space-sm rounded-lg bg-surface-container-low border border-surface-container-high/60 text-on-surface-variant font-body-sm text-[12px] flex items-center gap-space-xs">
-        <span className="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">info</span>
+      {/* ── Official Disclaimer ──────────────────────────────────── */}
+      <div className="p-space-sm rounded-lg bg-surface-container-low border border-surface-container-high/60 text-on-surface-variant font-body-sm text-[12px] flex items-start sm:items-center gap-space-xs">
+        <span className="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0 mt-0.5 sm:mt-0">info</span>
         <span>
           Offline evaluation on the project's synthetic/evaluation data; not a claim of production causal uplift.
         </span>
