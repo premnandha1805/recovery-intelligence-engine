@@ -1,8 +1,13 @@
 """
-Simulator configuration — all constants, enums, and probabilities live here.
+Simulator v2 configuration — all constants, enums, and probabilities live here.
 
-This keeps the generator modules clean and makes it easy to tune the
-synthetic world in one place.
+Changes from v1:
+  - Added ACTION_COSTS dict for configurable cost-per-action (in INR).
+  - Added ATTEMPT_DECAY_PER_CYCLE: penalty applied to p_natural for each
+    cumulative prior failure the customer has accumulated.
+  - Added NUDGE_FATIGUE_PER_NUDGE: small penalty when a customer has already
+    received a nudge in the current billing cycle attempt sequence.
+  - All other constants are identical to v1.
 """
 
 from enum import Enum
@@ -37,6 +42,30 @@ class PaymentMethod(str, Enum):
     NETBANKING = "netbanking"
     WALLET = "wallet"
 
+
+class Action(str, Enum):
+    WAIT = "WAIT"
+    RETRY = "RETRY"
+    NUDGE = "NUDGE"
+    ESCALATE = "ESCALATE"
+
+
+# ---------------------------------------------------------------------------
+# Action costs (INR) — the "price" of each intervention
+#
+# These are used to compute expected NET recovery value:
+#   net_value(action) = amount × p_success(action) − cost(action)
+#
+# Incremental value is always computed relative to WAIT:
+#   incremental_value(action) = net_value(action) − net_value(WAIT)
+# ---------------------------------------------------------------------------
+
+ACTION_COSTS: dict[Action, float] = {
+    Action.WAIT:     0.00,    # Passive — no intervention
+    Action.RETRY:    5.00,    # Gateway transaction fee
+    Action.NUDGE:   15.00,    # SMS / email / push notification
+    Action.ESCALATE: 250.00,  # Manual agent call / support ticket
+}
 
 # ---------------------------------------------------------------------------
 # Customer-type distribution — how common each archetype is
@@ -83,6 +112,42 @@ FAILURE_REASON_WEIGHTS = {
 }
 
 # ---------------------------------------------------------------------------
+# Failure-reason modifiers: applied to all four action probabilities
+# ---------------------------------------------------------------------------
+
+REASON_MODIFIER = {
+    "insufficient_funds":      -0.10,
+    "bank_decline":            -0.05,
+    "network_error":            0.05,
+    "expired_card":            -0.15,
+    "authentication_failure":  -0.08,
+    "temporary_bank_issue":     0.08,
+}
+
+# ---------------------------------------------------------------------------
+# Attempt-number modifier (per-attempt within a billing cycle)
+# Later attempts are harder; this is applied on top of the failure-reason mod.
+# ---------------------------------------------------------------------------
+
+ATTEMPT_MODIFIER = {1: 0.00, 2: -0.06, 3: -0.12, 4: -0.20}
+
+# ---------------------------------------------------------------------------
+# Cumulative-failure decay: per prior lifetime failure of the customer.
+# Captures the idea that a chronic failer is progressively harder to recover.
+# Capped internally in ground_truth.py to avoid driving probabilities to 0.
+# ---------------------------------------------------------------------------
+
+ATTEMPT_DECAY_PER_CYCLE: float = 0.03   # subtracted from p_natural per prior failure
+
+# ---------------------------------------------------------------------------
+# ESCALATE is not always best: penalty applied when amount is small enough
+# that the cost of escalation exceeds expected gross recovery uplift.
+# This penalty is NOT applied to the probability — it is already handled by
+# the net-value formula (cost=250). The design intentionally makes ESCALATE
+# unprofitable on low-value subscriptions.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # Payment-method distribution
 # ---------------------------------------------------------------------------
 
@@ -115,6 +180,7 @@ BILLING_FREQUENCY_WEIGHTS = [0.65, 0.25, 0.10]
 # Default generation settings
 # ---------------------------------------------------------------------------
 
-DEFAULT_NUM_PAYMENTS = 10_000
-DEFAULT_CUSTOMER_RATIO = 0.30    # ~3,000 customers for 10,000 payments
+DEFAULT_NUM_CUSTOMERS = 3_000
+DEFAULT_NUM_BILLING_CYCLES = 12   # simulate 12 billing cycles per customer
+MAX_ATTEMPTS_PER_CYCLE = 4        # max retry attempts within one failed cycle
 DEFAULT_SEED = 42

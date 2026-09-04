@@ -11,6 +11,11 @@ __pycache__/
 dist/
 build/
 
+# Generated evaluation data & detailed dumps (Day 5)
+ml/evaluation/seed555_data/
+ml/evaluation/training_seed*/
+ml/evaluation/*_detailed_evaluation.csv
+
 # Generated data
 data/raw/*.csv
 
@@ -27,3 +32,32 @@ Thumbs.db
 # Misc
 *.log
 .env
+.env.test
+
+# Testing & Coverage
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node & Backend Build
+backend/dist/
+backend/node_modules/
+
+# Frontend Build, Dependencies & Temporary Artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env*
+frontend/*.tsbuildinfo
+frontend/*.mjs
+frontend/*_report.json
+frontend/**/screen.png
+
+# SQLite local audit databases
+*.sqlite
+*.sqlite3
+decision_engine/*.db
+
+.env.prod
+.env.local
