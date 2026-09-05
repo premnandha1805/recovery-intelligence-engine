@@ -1,0 +1,13 @@
+Population,Policy,Net Value (INR),Gross Revenue (INR),Total Cost (INR),Recovery Rate,Escalation Rate,Rank
+Seed 777 (OOS Population 1),CausalUpliftPolicy,"INR 16,486,990.85","INR 16,740,795.85","INR 253,805.00",27.63%,0.13%,1
+Seed 777 (OOS Population 1),AlwaysRetryPolicy,"INR 15,360,307.59","INR 15,508,902.59","INR 148,595.00",25.49%,0.00%,2
+Seed 777 (OOS Population 1),RuleBasedPolicy (v1),"INR 14,433,756.53","INR 15,988,721.53","INR 1,554,965.00",25.93%,17.99%,3
+Seed 777 (OOS Population 1),AlwaysNudgePolicy,"INR 13,842,651.32","INR 14,288,436.32","INR 445,785.00",23.12%,0.00%,4
+Seed 777 (OOS Population 1),RuleBasedPolicyV2 (v2),"INR 12,879,882.01","INR 14,123,362.01","INR 1,243,480.00",25.67%,13.75%,5
+Seed 777 (OOS Population 1),WaitPolicy,"INR 8,703,500.25","INR 8,703,500.25",INR 0.00,14.37%,0.00%,6
+Seed 555 (OOS Population 2),CausalUpliftPolicy,"INR 17,491,398.62","INR 17,756,733.62","INR 265,335.00",27.59%,0.17%,1
+Seed 555 (OOS Population 2),AlwaysRetryPolicy,"INR 16,249,456.48","INR 16,400,901.48","INR 151,445.00",25.44%,0.00%,2
+Seed 555 (OOS Population 2),RuleBasedPolicy (v1),"INR 14,817,685.72","INR 16,386,510.72","INR 1,568,825.00",25.69%,17.75%,3
+Seed 555 (OOS Population 2),AlwaysNudgePolicy,"INR 14,171,618.29","INR 14,625,953.29","INR 454,335.00",23.07%,0.00%,4
+Seed 555 (OOS Population 2),RuleBasedPolicyV2 (v2),"INR 13,239,093.79","INR 14,543,428.79","INR 1,304,335.00",25.51%,14.29%,5
+Seed 555 (OOS Population 2),WaitPolicy,"INR 9,011,956.05","INR 9,011,956.05",INR 0.00,14.05%,0.00%,6

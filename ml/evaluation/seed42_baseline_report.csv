@@ -1,0 +1,6 @@
+rank,policy_name,n_payments,mean_p_success,recovery_rate_gt0,gross_recovered_revenue,total_action_cost,net_recovered_value,wait_pct,retry_pct,retry_nudge_pct,escalate_pct
+1,CausalUpliftPolicy,30472,0.270452,1.0,17698462.53,248400.0,17450062.53,2.02,66.46,31.48,0.04
+2,AlwaysRetryPolicy,30472,0.245444,1.0,16127059.69,152360.0,15974699.69,0.0,100.0,0.0,0.0
+3,RuleBasedPolicy,30472,0.253068,1.0,16502560.69,1680195.0,14822365.69,8.31,36.99,35.51,19.18
+4,AlwaysNudgePolicy,30472,0.230421,1.0,15117949.11,457080.0,14660869.11,0.0,0.0,100.0,0.0
+5,WaitPolicy,30472,0.138225,1.0,8960829.0,0.0,8960829.0,100.0,0.0,0.0,0.0
